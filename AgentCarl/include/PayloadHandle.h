@@ -17,25 +17,19 @@ namespace AgentCarl
 	public:
 		virtual ~PayloadHandle() noexcept(false);
 	public:
-		static PayloadHandleRef create(const std::string& payloadPath, ProcessID processID, PayloadID payloadID);
+		static PayloadHandleRef create(const std::string& payloadPath, ProcessID processID);
 	public:
-		bool inject();
-		bool detach();
-		PayloadID getID() const;
+		void inject();
 		operator bool() const;
 	public:
-		virtual bool call(const std::string& funcName, const void* param, uint64_t paramSize) = 0;
+		virtual void call(const std::string& funcName, const void* param, uint64_t paramSize) = 0;
 	protected:
-		virtual bool injectImpl() = 0;
-		virtual bool detachImpl() = 0;
+		virtual void injectImpl() = 0;
 	protected:
-		PayloadHandle(const std::string& payloadPath, ProcessID processID, PayloadID payloadID);
+		PayloadHandle(const std::string& payloadPath, ProcessID processID);
 	protected:
-		PayloadID m_payloadID;
 		std::string m_payloadPath;
 		ProcessID m_processID;
 		bool m_isInjected = false;
 	};
-
-	typedef std::map<PayloadID, PayloadHandleRef> _PayloadMap;
 }

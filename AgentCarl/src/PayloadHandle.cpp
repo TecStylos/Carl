@@ -7,51 +7,30 @@
 #endif
 
 #include <stdexcept>
+#include <filesystem>
 
 namespace AgentCarl
 {
 	PayloadHandle::~PayloadHandle() noexcept(false)
-	{
-		if (m_isInjected)
-			throw std::runtime_error("Implementation of payload handle did not detach the payload before destruction!");
-	}
+	{}
 
-	PayloadHandleRef PayloadHandle::create(const std::string& payloadPath, ProcessID processID, PayloadID payloadID)
+	PayloadHandleRef PayloadHandle::create(const std::string& payloadPath, ProcessID processID)
 	{
 		#if defined AGENT_CARL_PLATFORM_WINDOWS
-		return std::make_shared<Win32PayloadHandle>(payloadPath, processID, payloadID);
+		return std::make_shared<Win32PayloadHandle>(payloadPath, processID);
 		#elif defined AGENT_CARL_PLATFORM_UNIX
 		#error Unix currently unsupported!
 		#endif
 	}
 
-	bool PayloadHandle::inject()
+	void PayloadHandle::inject()
 	{
 		if (m_isInjected)
-			return true;
+			return;
 
-		if (!injectImpl())
-			return false;
+		injectImpl();
 
 		m_isInjected = true;
-		return true;
-	}
-
-	bool PayloadHandle::detach()
-	{
-		if (!m_isInjected)
-			return true;
-
-		if (!detachImpl())
-			return false;
-
-		m_isInjected = false;
-		return true;
-	}
-
-	PayloadID PayloadHandle::getID() const
-	{
-		return m_payloadID;
 	}
 
 	PayloadHandle::operator bool() const
@@ -59,7 +38,7 @@ namespace AgentCarl
 		return m_isInjected;
 	}
 
-	PayloadHandle::PayloadHandle(const std::string& payloadPath, ProcessID processID, PayloadID payloadID)
-		: m_payloadPath(payloadPath), m_processID(processID), m_payloadID(payloadID)
+	PayloadHandle::PayloadHandle(const std::string& payloadPath, ProcessID processID)
+		: m_payloadPath(std::filesystem::absolute(payloadPath).string()), m_processID(processID)
 	{}
 }

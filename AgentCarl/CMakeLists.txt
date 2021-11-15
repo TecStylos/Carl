@@ -14,6 +14,7 @@ if (WIN32)
 	set(
 		AGENT_CARL_SOURCES
 		${AGENT_CARL_SOURCES}
+		"src/Platform/Win32ErrorMessage.cpp"
 		"src/Platform/Win32PayloadHandle.cpp"
 	)
 elseif (UNIX)
@@ -62,7 +63,7 @@ set(
 if (WIN32)
 	set(
 		AGENT_CARL_COMPILE_DEFINITIONS
-		${AGENT_Carl_COMPILE_DEFINITIONS}
+		${AGENT_CARL_COMPILE_DEFINITIONS}
 		"AGENT_CARL_PLATFORM_WINDOWS"
 	)
 endif()

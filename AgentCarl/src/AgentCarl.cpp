@@ -1,14 +1,19 @@
 #include <iostream>
 #include <thread>
+#include <filesystem>
 
 #include "PayloadHandle.h"
+#include "PayloadError.h"
 
 int main(int argc, const char** argv, const char** env)
 {
+	std::cout << "WDIR -> " << std::filesystem::current_path().string() << std::endl;
+	for (int i = 0; i < argc; ++i)
+	{
+		std::cout << "ARG -> " << argv[i] << std::endl;
+	}
 	if (argc != 5)
 	{
-		while (true)
-			std::this_thread::sleep_for(std::chrono::seconds(10));
 		std::cout << "Usage: AgentCarl [targetPID] [dllPath] [initFuncName] [message]" << std::endl;
 		return -1;
 	}
@@ -21,37 +26,34 @@ int main(int argc, const char** argv, const char** env)
 	catch (std::runtime_error& err)
 	{
 		std::cout << "Invalid PID! -> " << err.what() << std::endl;
-		return -1;
+		return -2;
 	}
 
 	std::string dllPath = argv[2];
 	std::string initFuncName = argv[3];
 	std::string message = argv[4];
 
-	auto handle = AgentCarl::PayloadHandle::create(dllPath, targetPID, 0);
+	auto handle = AgentCarl::PayloadHandle::create(dllPath, targetPID);
 
-	if (!handle)
+	try
 	{
-		std::cout << "Unable to create payload handle!" << std::endl;
-		return -1;
+		handle->inject();
+	}
+	catch (const AgentCarl::PayloadError& err)
+	{
+		std::cout << "Unable to inject payload!: " << err.what() << std::endl;
+		return -3;
 	}
 
-	if (!handle->inject())
+	try
 	{
-		std::cout << "Unable to inject payload!" << std::endl;
-		return -1;
+		handle->call(initFuncName, message.c_str(), message.size() + 1);
 	}
-
-	if (!handle->call(initFuncName, message.c_str(), message.size() + 1))
+	catch (const AgentCarl::PayloadError& err)
 	{
 		std::cout << "Unable to call init function!" << std::endl;
-		return -1;
+		return -4;
 	}
 
-	if (!handle->detach())
-	{
-		std::cout << "Unable to detach payload!" << std::endl;
-		return -1;
-	}
 	return 0;
 }

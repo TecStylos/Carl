@@ -1,0 +1,34 @@
+cmake_minimum_required(VERSION 3.8)
+
+project("TestInjector")
+
+set(CMAKE_CXX_STANDARD 17)
+set(CMAKE_CXX_STANDARD_REQUIRED TRUE)
+
+add_executable(
+	TestInjector
+	"TestInjector.cpp"
+)
+
+target_include_directories(
+	TestInjector PUBLIC
+	"../Carl/include"
+)
+
+target_link_libraries(
+	TestInjector PUBLIC
+	Carl
+)
+
+if (WIN32)
+	target_compile_definitions(
+		TestInjector PUBLIC
+		"CARL_PLATFORM_WINDOWS"
+	)
+	add_custom_command(
+		TARGET TestInjector POST_BUILD
+		COMMAND ${CMAKE_COMMAND} -E copy_if_different
+    	"${PROJECT_SOURCE_DIR}/../bin/$<CONFIG>/Carl/Carl.dll"
+    	$<TARGET_FILE_DIR:TestInjector>
+	)
+endif()

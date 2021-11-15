@@ -4,3 +4,5 @@ project("BUILD ALL")
 
 add_subdirectory("Carl")
 add_subdirectory("AgentCarl")
+add_subdirectory("TestPayload")
+add_subdirectory("TestInjector")

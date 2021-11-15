@@ -11,21 +11,19 @@ namespace AgentCarl
 	class Win32PayloadHandle : public PayloadHandle
 	{
 	public:
-		Win32PayloadHandle(const std::string& payloadPath, ProcessID processID, PayloadID payloadID);
-		~Win32PayloadHandle();
+		Win32PayloadHandle(const std::string& payloadPath, ProcessID processID);
 	public:
-		virtual bool call(const std::string& funcName, const void* param, uint64_t paramSize) override;
+		virtual void call(const std::string& funcName, const void* param, uint64_t paramSize) override;
 	protected:
-		virtual bool injectImpl() override;
-		virtual bool detachImpl() override;
+		virtual void injectImpl() override;
 	private:
 		HMODULE getPayloadBaseAddr() const;
 		LPTHREAD_START_ROUTINE getPayloadFuncAddr(const std::string& funcName) const;
 	private:
 		void* targetAlloc(uint64_t size);
-		bool targetFree(void* base);
-		bool targetWrite(void* destTarget, const void* src, uint64_t size);
-		bool targetRead(void* dest, const void* srcTarget, uint64_t size);
+		void targetFree(void* base);
+		void targetWrite(void* destTarget, const void* src, uint64_t size);
+		void targetRead(void* dest, const void* srcTarget, uint64_t size);
 	private:
 		HMODULE m_payloadBase = nullptr;
 		Win32HandleHelper m_hProcTarget = 0;
