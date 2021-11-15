@@ -66,6 +66,12 @@ if (WIN32)
 		${AGENT_CARL_COMPILE_DEFINITIONS}
 		"AGENT_CARL_PLATFORM_WINDOWS"
 	)
+	add_custom_command(
+		TARGET AgentCarl POST_BUILD
+		COMMAND ${CMAKE_COMMAND} -E copy_if_different
+    	"$<TARGET_FILE_DIR:AgentCarl>/AgentCarl_${AGENT_CARL_ARCHITECTURE}.exe"
+    	"${PROJECT_SOURCE_DIR}/../bintools/$<CONFIG>/"
+	)
 endif()
 
 if (UNIX)

@@ -4,10 +4,13 @@
 
 int main()
 {
-	std::string agentDir = "../AgentCarl";
+	std::string agentDir = "..\\..\\..\\bintools\\Debug\\";
 
-	Carl::ProcessID targetPID = 21612;
-	std::string payloadPath = "..\\TestPayload\\TestPayload.dll";
+	Carl::ProcessID targetPID;
+	std::cout << "Target PID: ";
+	std::cin >> targetPID;
+
+	std::string payloadPath = "..\\..\\..\\bintools\\Debug\\TestPayload_[.].dll";
 
 	Carl::PayloadConnectorRef pc;
 

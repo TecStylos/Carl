@@ -1,6 +1,9 @@
-#include <iostream>
 
+#include <EHSN.h>
+#include <iostream>
 #include <Windows.h>
+#include <string>
+#include <thread>
 
 HMODULE DLL_MODULE_HANDLE = nullptr;
 
@@ -30,12 +33,28 @@ void selfDetach()
 {
 	if (!DLL_MODULE_HANDLE)
 		return;
-	FreeLibraryAndExitThread(DLL_MODULE_HANDLE, 0);
+	FreeLibrary(DLL_MODULE_HANDLE);
+}
+
+void mainFunc(std::string port)
+{
+	EHSN::net::ManagedSocket queue(std::make_shared<EHSN::net::SecSocket>(EHSN::crypto::defaultRDG, 0));
+
+	uint8_t connectCount = 0;
+	while (!queue.getSock()->isConnected() && connectCount++ < 8)
+		queue.connect("localhost", port, true);
+
+	if (!queue.getSock()->isConnected())
+		selfDetach();
+
+	std::cout << "Connected to host!" << std::endl;
+
+	selfDetach();
 }
 
 extern "C" __declspec(dllexport) uint32_t connectToHost(void* param)
 {
-	std::cout << (const char*)param << std::endl;
-	selfDetach();
+	std::thread thread(mainFunc, (const char*)param);
+	thread.detach();
 	return 0;
 }

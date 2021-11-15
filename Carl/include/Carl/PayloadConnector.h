@@ -3,6 +3,8 @@
 #include <memory>
 #include <string>
 
+#include <EHSN.h>
+
 #include "Types.h"
 #include "Defines.h"
 
@@ -17,7 +19,16 @@ namespace Carl
 	public:
 		CARL_API uint16_t getPort() const;
 	private:
-		uint16_t m_port = 0;
+		void sessionFunc(EHSN::net::SecSocketRef sock, void* pParam);
+	private:
+		std::shared_ptr<EHSN::net::ManagedSocket> m_queue;
+		EHSN::net::SecAcceptor m_acceptor;
+	private:
+		std::mutex m_mtx;
+		std::condition_variable m_conVar;
+		bool m_isAccepted = false;
+	private:
+		friend void _internalSessionInitFunc(EHSN::net::SecSocketRef sock, void* pParam);
 	};
 
 	typedef std::shared_ptr<PayloadConnector> PayloadConnectorRef;

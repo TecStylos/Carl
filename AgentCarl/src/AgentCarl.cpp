@@ -7,18 +7,13 @@
 
 int main(int argc, const char** argv, const char** env)
 {
-	std::cout << "WDIR -> " << std::filesystem::current_path().string() << std::endl;
-	for (int i = 0; i < argc; ++i)
-	{
-		std::cout << "ARG -> " << argv[i] << std::endl;
-	}
 	if (argc != 5)
 	{
 		std::cout << "Usage: AgentCarl [targetPID] [dllPath] [initFuncName] [message]" << std::endl;
 		return -1;
 	}
 
-	int targetPID = 0;
+	AgentCarl::ProcessID targetPID = 0;
 	try
 	{
 		targetPID = std::stoul(argv[1]);
@@ -51,7 +46,7 @@ int main(int argc, const char** argv, const char** env)
 	}
 	catch (const AgentCarl::PayloadError& err)
 	{
-		std::cout << "Unable to call init function!" << std::endl;
+		std::cout << "Unable to call init function!" << err.what() << std::endl;
 		return -4;
 	}
 

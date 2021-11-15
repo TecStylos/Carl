@@ -19,7 +19,8 @@ if (WIN32)
 		${CARL_SOURCES}
 		"src/Platform/Win32AgentRunner.cpp"
 		"src/Platform/Win32ProcessArchitecture.cpp"
-	 "src/Platform/Win32ErrorMessage.cpp")
+		"src/Platform/Win32ErrorMessage.cpp"
+	)
 endif()
 
 if (UNIX)
@@ -34,6 +35,11 @@ endif()
 add_library(
 	Carl SHARED
 	${CARL_SOURCES}
+)
+
+target_link_libraries(
+	Carl PUBLIC 
+	EHSN
 )
 
 SET_TARGET_PROPERTIES(
