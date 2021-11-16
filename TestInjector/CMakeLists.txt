@@ -20,6 +20,10 @@ target_link_libraries(
 	Carl
 )
 
+set_target_properties(
+	TestInjector PROPERTIES OUTPUT_NAME "TestInjector_${CARL_ARCHITECTURE}"
+)
+
 if (WIN32)
 	target_compile_definitions(
 		TestInjector PUBLIC
@@ -28,7 +32,7 @@ if (WIN32)
 	add_custom_command(
 		TARGET TestInjector POST_BUILD
 		COMMAND ${CMAKE_COMMAND} -E copy_if_different
-    	"${PROJECT_SOURCE_DIR}/../bin/$<CONFIG>/Carl/Carl.dll"
+    	"${PROJECT_SOURCE_DIR}/../bin/${CARL_ARCHITECTURE}-$<CONFIG>/Carl/Carl_${CARL_ARCHITECTURE}.dll"
     	$<TARGET_FILE_DIR:TestInjector>
 	)
 endif()

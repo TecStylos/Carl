@@ -7,10 +7,11 @@ int main()
 {
 	std::string agentDir = "..\\..\\..\\bintools\\Debug\\";
 
-	Carl::ProcessID targetPID;
 	std::cout << "Target PID: ";
-	std::cin >> targetPID;
-	std::cin.clear();
+	std::string tPIDStr;
+	std::getline(std::cin, tPIDStr);
+	Carl::ProcessID targetPID;
+	targetPID = std::stoul(tPIDStr);
 
 	std::string payloadPath = "..\\..\\..\\bintools\\Debug\\TestPayload_[.].dll";
 

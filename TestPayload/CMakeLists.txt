@@ -25,21 +25,15 @@ SET_TARGET_PROPERTIES(
 	TestPayload PROPERTIES PREFIX ""
 )
 
-string(
-	TOLOWER
-	${MSVC_C_ARCHITECTURE_ID}
-	TESTPAYLOAD_ARCHITECTURE
-)
-
 set_target_properties(
-	TestPayload PROPERTIES OUTPUT_NAME "TestPayload_${TESTPAYLOAD_ARCHITECTURE}"
+	TestPayload PROPERTIES OUTPUT_NAME "TestPayload_${CARL_ARCHITECTURE}"
 )
 
 if (WIN32)
 	add_custom_command(
 		TARGET TestPayload POST_BUILD
 		COMMAND ${CMAKE_COMMAND} -E copy_if_different
-    	"$<TARGET_FILE_DIR:TestPayload>/TestPayload_${TESTPAYLOAD_ARCHITECTURE}.dll"
+    	"$<TARGET_FILE_DIR:TestPayload>/TestPayload_${CARL_ARCHITECTURE}.dll"
     	"${PROJECT_SOURCE_DIR}/../bintools/$<CONFIG>/"
 	)
 endif()

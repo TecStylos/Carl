@@ -46,6 +46,10 @@ SET_TARGET_PROPERTIES(
 	Carl PROPERTIES PREFIX ""
 )
 
+set_target_properties(
+	Carl PROPERTIES OUTPUT_NAME "Carl_${CARL_ARCHITECTURE}"
+)
+
 target_include_directories(
 	Carl PUBLIC
 	"include"

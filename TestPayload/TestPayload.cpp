@@ -40,10 +40,7 @@ void selfDetach()
 
 void mainFunc(std::string port)
 {
-	auto sock = std::make_shared<EHSN::net::SecSocket>(EHSN::crypto::defaultRDG, 0);
-	sock->connect("localhost", port, true);
-
-	/*EHSN::net::ManagedSocket queue(std::make_shared<EHSN::net::SecSocket>(EHSN::crypto::defaultRDG, 0));
+	EHSN::net::ManagedSocket queue(std::make_shared<EHSN::net::SecSocket>(EHSN::crypto::defaultRDG, 0));
 
 	uint8_t connectCount = 0;
 	while (!queue.isConnected() && connectCount++ < 8)
@@ -52,6 +49,8 @@ void mainFunc(std::string port)
 	if (!queue.isConnected())
 		return;
 
+	std::cout << "Connected to host!" << std::endl;
+
 	while (queue.isConnected())
 	{
 		auto pack = queue.pull(Carl::PT_ECHO_REQUEST);
@@ -59,9 +58,7 @@ void mainFunc(std::string port)
 			break;
 		std::string line = (char*)pack.buffer->data();
 		std::cout << line << std::endl;
-	}*/
-
-	std::cout << "Starting shutdown..." << std::endl;
+	}
 }
 
 extern "C" DWORD WINAPI mainFuncThread(void* param)
@@ -74,6 +71,7 @@ extern "C" DWORD WINAPI mainFuncThread(void* param)
 
 extern "C" __declspec(dllexport) DWORD WINAPI connectToHost(void* param)
 {
+	#pragma comment(linker, "/EXPORT:" __FUNCTION__ "=" __FUNCDNAME__)
 	CreateThread(NULL, 0, mainFuncThread, param, 0, NULL);
 	return 0;
 }
