@@ -18,6 +18,7 @@ target_link_libraries(
 target_include_directories(
 	TestPayload PUBLIC 
 	"../vendor/asio/asio/include"
+	"../Carl/include"
 )
 
 SET_TARGET_PROPERTIES(

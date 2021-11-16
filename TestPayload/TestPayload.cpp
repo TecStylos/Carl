@@ -1,9 +1,8 @@
+#include <CarlPayload.h>
 
-#include <EHSN.h>
 #include <iostream>
 #include <Windows.h>
 #include <string>
-#include <thread>
 
 HMODULE DLL_MODULE_HANDLE = nullptr;
 
@@ -33,28 +32,48 @@ void selfDetach()
 {
 	if (!DLL_MODULE_HANDLE)
 		return;
-	FreeLibrary(DLL_MODULE_HANDLE);
+
+	std::cout << "Freeing library..." << std::endl;
+
+	FreeLibraryAndExitThread(DLL_MODULE_HANDLE, 0);
 }
 
 void mainFunc(std::string port)
 {
-	EHSN::net::ManagedSocket queue(std::make_shared<EHSN::net::SecSocket>(EHSN::crypto::defaultRDG, 0));
+	auto sock = std::make_shared<EHSN::net::SecSocket>(EHSN::crypto::defaultRDG, 0);
+	sock->connect("localhost", port, true);
+
+	/*EHSN::net::ManagedSocket queue(std::make_shared<EHSN::net::SecSocket>(EHSN::crypto::defaultRDG, 0));
 
 	uint8_t connectCount = 0;
-	while (!queue.getSock()->isConnected() && connectCount++ < 8)
+	while (!queue.isConnected() && connectCount++ < 8)
 		queue.connect("localhost", port, true);
 
-	if (!queue.getSock()->isConnected())
-		selfDetach();
+	if (!queue.isConnected())
+		return;
 
-	std::cout << "Connected to host!" << std::endl;
+	while (queue.isConnected())
+	{
+		auto pack = queue.pull(Carl::PT_ECHO_REQUEST);
+		if (!pack.buffer)
+			break;
+		std::string line = (char*)pack.buffer->data();
+		std::cout << line << std::endl;
+	}*/
 
-	selfDetach();
+	std::cout << "Starting shutdown..." << std::endl;
 }
 
-extern "C" __declspec(dllexport) uint32_t connectToHost(void* param)
+extern "C" DWORD WINAPI mainFuncThread(void* param)
 {
-	std::thread thread(mainFunc, (const char*)param);
-	thread.detach();
+	std::string paramStr = (char*)param;
+	mainFunc(paramStr);
+	selfDetach();
+	return 0;
+}
+
+extern "C" __declspec(dllexport) DWORD WINAPI connectToHost(void* param)
+{
+	CreateThread(NULL, 0, mainFuncThread, param, 0, NULL);
 	return 0;
 }

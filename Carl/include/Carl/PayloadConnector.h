@@ -18,10 +18,12 @@ namespace Carl
 		CARL_API void accept();
 	public:
 		CARL_API uint16_t getPort() const;
+	public:
+		CARL_API EHSN::net::ManagedSocketRef getQueue();
 	private:
 		void sessionFunc(EHSN::net::SecSocketRef sock, void* pParam);
 	private:
-		std::shared_ptr<EHSN::net::ManagedSocket> m_queue;
+		EHSN::net::ManagedSocketRef m_queue;
 		EHSN::net::SecAcceptor m_acceptor;
 	private:
 		std::mutex m_mtx;

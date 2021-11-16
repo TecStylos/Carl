@@ -1,8 +1,8 @@
 #include "Carl/PayloadConnector.h"
 
-#include "Carl/CarlError.h"
-
 #include <condition_variable>
+
+#include "Carl/CarlError.h"
 
 namespace Carl
 {
@@ -33,5 +33,10 @@ namespace Carl
 	uint16_t PayloadConnector::getPort() const
 	{
 		return m_acceptor.getPort();
+	}
+
+	EHSN::net::ManagedSocketRef PayloadConnector::getQueue()
+	{
+		return m_queue;
 	}
 }
