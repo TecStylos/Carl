@@ -13,12 +13,14 @@ add_library(
 target_link_libraries(
 	TestPayload PUBLIC 
 	EHSN
+	Detours
 )
 
 target_include_directories(
 	TestPayload PUBLIC 
 	"../vendor/asio/asio/include"
 	"../Carl/include"
+	"../vendor/Detours/src"
 )
 
 SET_TARGET_PROPERTIES(

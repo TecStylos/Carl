@@ -1,3 +1,6 @@
 [submodule "vendor/EHSN"]
 	path = vendor/EHSN
 	url = https://github.com/TecStylos/EHSN.git
+[submodule "vendor/Detours"]
+	path = vendor/Detours
+	url = https://github.com/TecStylos/Detours.git

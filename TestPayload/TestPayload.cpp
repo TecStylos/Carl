@@ -4,7 +4,17 @@
 #include <Windows.h>
 #include <string>
 
+#include <detours.h>
+
 HMODULE DLL_MODULE_HANDLE = nullptr;
+
+static BOOL (WINAPI* TrueSetConsoleTitle)(_In_ LPCTSTR newTitle) = SetConsoleTitle;
+
+BOOL WINAPI MySetConsoleTitle(_In_ LPCTSTR newTitle)
+{
+	std::cout << "Setting new title: " << newTitle << std::endl;
+	return TrueSetConsoleTitle(newTitle);
+}
 
 BOOL WINAPI DllMain(
 	HINSTANCE hInstDll,
@@ -12,16 +22,29 @@ BOOL WINAPI DllMain(
 	LPVOID lpReserved
 )
 {
+	if (DetourIsHelperProcess())
+		return TRUE;
+
 	switch (fdwReason)
 	{
 	case DLL_PROCESS_ATTACH:
 		DLL_MODULE_HANDLE = hInstDll;
+		DetourRestoreAfterWith();
+
+		DetourTransactionBegin();
+		DetourUpdateThread(GetCurrentThread());
+		DetourAttach(&(PVOID&)TrueSetConsoleTitle, MySetConsoleTitle);
+		DetourTransactionCommit();
 		break;
 	case DLL_THREAD_ATTACH:
 		break;
 	case DLL_THREAD_DETACH:
 		break;
 	case DLL_PROCESS_DETACH:
+		DetourTransactionBegin();
+		DetourUpdateThread(GetCurrentThread());
+		DetourDetach(&(PVOID&)TrueSetConsoleTitle, MySetConsoleTitle);
+		DetourTransactionCommit();
 		break;
 	}
 
@@ -51,6 +74,8 @@ void mainFunc(std::string port)
 
 	std::cout << "Connected to host!" << std::endl;
 
+	SetConsoleTitleA("Hello world!");
+
 	while (queue.isConnected())
 	{
 		auto pack = queue.pull(Carl::PT_ECHO_REQUEST);
@@ -63,8 +88,23 @@ void mainFunc(std::string port)
 
 extern "C" DWORD WINAPI mainFuncThread(void* param)
 {
+	bool allocatedConsole = false;
+	if (AllocConsole())
+	{
+		allocatedConsole = true;
+		FILE *temp;
+		freopen_s(&temp, "CONOUT$", "w", stdout);
+		freopen_s(&temp, "CONIN$", "r", stdin);
+	}
+
 	std::string paramStr = (char*)param;
 	mainFunc(paramStr);
+
+	if (allocatedConsole)
+	{
+		FreeConsole();
+	}
+
 	selfDetach();
 	return 0;
 }
