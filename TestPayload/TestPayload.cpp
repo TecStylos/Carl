@@ -3,18 +3,80 @@
 #include <iostream>
 #include <Windows.h>
 #include <string>
+#include <mmsystem.h>
+#include <dsound.h>
 
 #include <detours.h>
 
 HMODULE DLL_MODULE_HANDLE = nullptr;
+LONG TRANS_COMMIT = 0;
 
-static BOOL (WINAPI* TrueSetConsoleTitle)(_In_ LPCTSTR newTitle) = SetConsoleTitle;
+//class MySoundBuffer8 : public IDirectSoundBuffer8
+//{
+//public:
+//	HRESULT __stdcall myLock(
+//		DWORD dwOffset,
+//		DWORD dwBytes,
+//		LPVOID* ppvAudioPtr1,
+//		LPDWORD pdwAudioBytes1,
+//		LPVOID* ppvAudioPtr2,
+//		LPDWORD pdwAudioBytes2,
+//		DWORD dwFlags
+//	)
+//	{
+//		std::cout << "Called MySoundBuffer8::myLock :)" << std::endl;
+//		return (this->*realLock)(
+//			dwOffset,
+//			dwBytes,
+//			ppvAudioPtr1,
+//			pdwAudioBytes1,
+//			ppvAudioPtr2,
+//			pdwAudioBytes2,
+//			dwFlags
+//			);
+//	}
+//public:
+//	static HRESULT (__stdcall MySoundBuffer8::* realLock)(
+//		DWORD dwOffset,
+//		DWORD dwBytes,
+//		LPVOID* ppvAudioPtr1,
+//		LPDWORD pdwAudioBytes1,
+//		LPVOID* ppvAudioPtr2,
+//		LPDWORD pdwAudioBytes2,
+//		DWORD dwFlags
+//		);
+//};
+//
+//HRESULT (__stdcall MySoundBuffer8::* MySoundBuffer8::realLock)(
+//	DWORD dwOffset,
+//	DWORD dwBytes,
+//	LPVOID* ppvAudioPtr1,
+//	LPDWORD pdwAudioBytes1,
+//	LPVOID* ppvAudioPtr2,
+//	LPDWORD pdwAudioBytes2,
+//	DWORD dwFlags
+//	) = &IDirectSoundBuffer8::Lock;
 
-BOOL WINAPI MySetConsoleTitle(_In_ LPCTSTR newTitle)
+
+typedef HRESULT(*DirectSoundCreate8_t)(
+	LPCGUID, LPDIRECTSOUND8*, LPUNKNOWN
+	);
+static DirectSoundCreate8_t RealDirectSoundCreate8 = 0;
+
+HRESULT MyDirectSoundCreate8(
+	LPCGUID lpcGuidDevice,
+	LPDIRECTSOUND8* ppDS8,
+	LPUNKNOWN pUnkOuter
+)
 {
-	std::cout << "Setting new title: " << newTitle << std::endl;
-	return TrueSetConsoleTitle(newTitle);
+	std::cout << "Called MyDirectSoundCreate8 :)" << std::endl;
+	return RealDirectSoundCreate8(
+		lpcGuidDevice,
+		ppDS8,
+		pUnkOuter
+	);
 }
+
 
 BOOL WINAPI DllMain(
 	HINSTANCE hInstDll,
@@ -25,16 +87,34 @@ BOOL WINAPI DllMain(
 	if (DetourIsHelperProcess())
 		return TRUE;
 
+	/*static HRESULT (__stdcall MySoundBuffer8:: * pfMyLock)(
+		DWORD dwOffset,
+		DWORD dwBytes,
+		LPVOID * ppvAudioPtr1,
+		LPDWORD pdwAudioBytes1,
+		LPVOID * ppvAudioPtr2,
+		LPDWORD pdwAudioBytes2,
+		DWORD dwFlags
+		) = &MySoundBuffer8::myLock;*/
+
 	switch (fdwReason)
 	{
 	case DLL_PROCESS_ATTACH:
 		DLL_MODULE_HANDLE = hInstDll;
+		DisableThreadLibraryCalls(hInstDll);
 		DetourRestoreAfterWith();
+
+		{
+			HMODULE dsound = GetModuleHandleA("dsound.dll");
+			if (dsound)
+				RealDirectSoundCreate8 = (DirectSoundCreate8_t)GetProcAddress(dsound, "DirectSoundCreate8");
+		}
 
 		DetourTransactionBegin();
 		DetourUpdateThread(GetCurrentThread());
-		DetourAttach(&(PVOID&)TrueSetConsoleTitle, MySetConsoleTitle);
-		DetourTransactionCommit();
+		//DetourAttach(&(PVOID&)MySoundBuffer8::realLock, *(PBYTE*)&pfMyLock);
+		DetourAttach(&(PVOID&)RealDirectSoundCreate8, MyDirectSoundCreate8);
+		TRANS_COMMIT = DetourTransactionCommit();
 		break;
 	case DLL_THREAD_ATTACH:
 		break;
@@ -43,7 +123,8 @@ BOOL WINAPI DllMain(
 	case DLL_PROCESS_DETACH:
 		DetourTransactionBegin();
 		DetourUpdateThread(GetCurrentThread());
-		DetourDetach(&(PVOID&)TrueSetConsoleTitle, MySetConsoleTitle);
+		//DetourDetach(&(PVOID&)MySoundBuffer8::realLock, *(PBYTE*)&pfMyLock);
+		DetourDetach(&(PVOID&)RealDirectSoundCreate8, MyDirectSoundCreate8);
 		DetourTransactionCommit();
 		break;
 	}
@@ -63,6 +144,8 @@ void selfDetach()
 
 void mainFunc(std::string port)
 {
+	std::cout << "Transaction commit: " << TRANS_COMMIT << std::endl;
+
 	EHSN::net::ManagedSocket queue(std::make_shared<EHSN::net::SecSocket>(EHSN::crypto::defaultRDG, 0));
 
 	uint8_t connectCount = 0;
@@ -73,8 +156,6 @@ void mainFunc(std::string port)
 		return;
 
 	std::cout << "Connected to host!" << std::endl;
-
-	SetConsoleTitleA("Hello world!");
 
 	while (queue.isConnected())
 	{
