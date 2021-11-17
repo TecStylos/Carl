@@ -8,54 +8,54 @@
 
 #include <detours.h>
 
+#pragma comment(lib, "dsound.lib")
+#pragma comment(lib, "dxguid.lib")
+
 HMODULE DLL_MODULE_HANDLE = nullptr;
 LONG TRANS_COMMIT = 0;
 
-//class MySoundBuffer8 : public IDirectSoundBuffer8
-//{
-//public:
-//	HRESULT __stdcall myLock(
-//		DWORD dwOffset,
-//		DWORD dwBytes,
-//		LPVOID* ppvAudioPtr1,
-//		LPDWORD pdwAudioBytes1,
-//		LPVOID* ppvAudioPtr2,
-//		LPDWORD pdwAudioBytes2,
-//		DWORD dwFlags
-//	)
-//	{
-//		std::cout << "Called MySoundBuffer8::myLock :)" << std::endl;
-//		return (this->*realLock)(
-//			dwOffset,
-//			dwBytes,
-//			ppvAudioPtr1,
-//			pdwAudioBytes1,
-//			ppvAudioPtr2,
-//			pdwAudioBytes2,
-//			dwFlags
-//			);
-//	}
-//public:
-//	static HRESULT (__stdcall MySoundBuffer8::* realLock)(
-//		DWORD dwOffset,
-//		DWORD dwBytes,
-//		LPVOID* ppvAudioPtr1,
-//		LPDWORD pdwAudioBytes1,
-//		LPVOID* ppvAudioPtr2,
-//		LPDWORD pdwAudioBytes2,
-//		DWORD dwFlags
-//		);
-//};
-//
-//HRESULT (__stdcall MySoundBuffer8::* MySoundBuffer8::realLock)(
-//	DWORD dwOffset,
-//	DWORD dwBytes,
-//	LPVOID* ppvAudioPtr1,
-//	LPDWORD pdwAudioBytes1,
-//	LPVOID* ppvAudioPtr2,
-//	LPDWORD pdwAudioBytes2,
-//	DWORD dwFlags
-//	) = &IDirectSoundBuffer8::Lock;
+class MySoundBuffer8 : public IDirectSoundBuffer8
+{
+public:
+	HRESULT __stdcall myLock(
+		DWORD dwOffset,
+		DWORD dwBytes,
+		LPVOID* ppvAudioPtr1,
+		LPDWORD pdwAudioBytes1,
+		LPVOID* ppvAudioPtr2,
+		LPDWORD pdwAudioBytes2,
+		DWORD dwFlags
+	)
+	{
+		std::cout << "Params:" << std::endl
+			<< "  " << "dwOffset       " << dwOffset << std::endl
+			<< "  " << "dwBytes        " << dwBytes << std::endl
+			<< "  " << "ppvAudioPtr1   " << ppvAudioPtr1 << std::endl
+			<< "  " << "pdwAudioBytes1 " << pdwAudioBytes1 << std::endl
+			<< "  " << "ppvAudioPtr2   " << ppvAudioPtr2 << std::endl
+			<< "  " << "pdwAudioBytes2 " << pdwAudioBytes2 << std::endl
+			<< "  " << "dwFlags        " << dwFlags << std::endl;
+		return (this->*realLock)(
+			dwOffset,
+			dwBytes,
+			ppvAudioPtr1,
+			pdwAudioBytes1,
+			ppvAudioPtr2,
+			pdwAudioBytes2,
+			dwFlags
+			);
+	}
+public:
+	inline static HRESULT (__stdcall MySoundBuffer8::* realLock)(
+		DWORD dwOffset,
+		DWORD dwBytes,
+		LPVOID* ppvAudioPtr1,
+		LPDWORD pdwAudioBytes1,
+		LPVOID* ppvAudioPtr2,
+		LPDWORD pdwAudioBytes2,
+		DWORD dwFlags
+		) = 0;
+};
 
 
 typedef HRESULT(*DirectSoundCreate8_t)(
@@ -132,6 +132,91 @@ BOOL WINAPI DllMain(
 	return TRUE;
 }
 
+void* getAddrFromVTable(uint64_t index)
+{
+	CoInitialize(NULL);
+
+	IDirectSound8* pDirectSound8 = nullptr;
+	DirectSoundCreate8(&DSDEVID_DefaultPlayback, &pDirectSound8, NULL);
+
+	SetConsoleTitle("ABCDEFGH");
+	Sleep(40);
+	HWND hWnd = FindWindow(NULL, "ABCDEFGH");
+
+	pDirectSound8->SetCooperativeLevel(hWnd, DSSCL_NORMAL);
+
+	WAVEFORMATEX format;
+	format.wFormatTag = WAVE_FORMAT_PCM;
+	format.nChannels = 2;
+	format.nSamplesPerSec = 8192;
+	format.wBitsPerSample = 16;
+	format.nBlockAlign = (format.nChannels * format.wBitsPerSample) / 8;
+	format.nAvgBytesPerSec = format.nSamplesPerSec * format.nBlockAlign;
+	format.cbSize = 0;
+
+	DSBUFFERDESC desc;
+	desc.dwSize = sizeof(DSBUFFERDESC);
+	desc.dwFlags = DSBCAPS_CTRLVOLUME;
+	desc.dwBufferBytes = 1024;
+	desc.dwReserved = 0;
+	desc.lpwfxFormat = &format;
+	desc.guid3DAlgorithm = DS3DALG_DEFAULT;
+	IDirectSoundBuffer* pBuffer;
+	HRESULT res = pDirectSound8->CreateSoundBuffer(&desc, &pBuffer, NULL);
+
+	IDirectSoundBuffer8* pBuffer8;
+	pBuffer->QueryInterface(IID_IDirectSoundBuffer8, (void**)&pBuffer8);
+	pBuffer->Release();
+
+	uintptr_t* vtable = *(uintptr_t**)pBuffer8;
+	void* retAddr = (void*)vtable[index];
+
+	pBuffer8->Release();
+
+	return retAddr;
+}
+
+void makeDirectSoundBuffer8LockDetour()
+{
+	// vtable[11]
+
+	void* realLock = getAddrFromVTable(11);
+	MySoundBuffer8::realLock = (HRESULT(__cdecl MySoundBuffer8::*&)(DWORD, DWORD, LPVOID*, LPDWORD, LPVOID*, LPDWORD, DWORD))realLock;
+
+	static HRESULT(__stdcall MySoundBuffer8::* pfMyLock)(
+		DWORD dwOffset,
+		DWORD dwBytes,
+		LPVOID * ppvAudioPtr1,
+		LPDWORD pdwAudioBytes1,
+		LPVOID * ppvAudioPtr2,
+		LPDWORD pdwAudioBytes2,
+		DWORD dwFlags
+		) = &MySoundBuffer8::myLock;
+
+	DetourTransactionBegin();
+	DetourUpdateThread(GetCurrentThread());
+	DetourAttach(&(PVOID&)MySoundBuffer8::realLock, *(PBYTE*)&pfMyLock);
+	DetourTransactionCommit();
+}
+
+void removeDirectSoundBuffer8LockDetour()
+{
+	static HRESULT(__stdcall MySoundBuffer8:: * pfMyLock)(
+		DWORD dwOffset,
+		DWORD dwBytes,
+		LPVOID * ppvAudioPtr1,
+		LPDWORD pdwAudioBytes1,
+		LPVOID * ppvAudioPtr2,
+		LPDWORD pdwAudioBytes2,
+		DWORD dwFlags
+		) = &MySoundBuffer8::myLock;
+
+	DetourTransactionBegin();
+	DetourUpdateThread(GetCurrentThread());
+	DetourDetach(&(PVOID&)MySoundBuffer8::realLock, *(PBYTE*)&pfMyLock);
+	DetourTransactionCommit();
+}
+
 void selfDetach()
 {
 	if (!DLL_MODULE_HANDLE)
@@ -144,6 +229,8 @@ void selfDetach()
 
 void mainFunc(std::string port)
 {
+	makeDirectSoundBuffer8LockDetour();
+
 	std::cout << "Transaction commit: " << TRANS_COMMIT << std::endl;
 
 	EHSN::net::ManagedSocket queue(std::make_shared<EHSN::net::SecSocket>(EHSN::crypto::defaultRDG, 0));
@@ -165,6 +252,8 @@ void mainFunc(std::string port)
 		std::string line = (char*)pack.buffer->data();
 		std::cout << line << std::endl;
 	}
+
+	removeDirectSoundBuffer8LockDetour();
 }
 
 extern "C" DWORD WINAPI mainFuncThread(void* param)
