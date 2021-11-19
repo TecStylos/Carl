@@ -44,16 +44,12 @@ void selfDetach()
 	if (!DLL_MODULE_HANDLE)
 		return;
 
-	std::cout << "Freeing library..." << std::endl;
-
 	FreeLibraryAndExitThread(DLL_MODULE_HANDLE, 0);
 }
 
 void mainFunc(std::string port)
 {
 	makeAudioRenderClientDetours();
-
-	std::cout << "Transaction commit: " << TRANS_COMMIT << std::endl;
 
 	EHSN::net::ManagedSocket queue(std::make_shared<EHSN::net::SecSocket>(EHSN::crypto::defaultRDG, 0));
 

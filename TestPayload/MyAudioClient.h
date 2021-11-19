@@ -1,10 +1,14 @@
 #pragma once
 
 #include <iostream>
+#include <iomanip>
+#include <set>
+#include <map>
+#include <mutex>
+
 #include <Audioclient.h>
 #include <mmdeviceapi.h>
 #include <detours.h>
-#include <set>
 
 #include "GetFuncFromObjVTable.h"
 
@@ -19,30 +23,62 @@ const IID IID_IAudioClient = __uuidof(IAudioClient);
 const IID IID_IAudioRenderClient = __uuidof(IAudioRenderClient);
 const IID IID_IAudioStreamVolume = __uuidof(IAudioStreamVolume);
 
-
 class MyAudioClient;
+class MyAudioRenderClient;
+
 typedef HRESULT(__stdcall MyAudioClient::* MyAudioClient_GetCurrentPadding_t)(UINT32*);
+typedef HRESULT(__stdcall MyAudioRenderClient::* MyAudioRenderClient_GetBuffer_t)(UINT32, BYTE**);
+typedef HRESULT(__stdcall MyAudioRenderClient::* MyAudioRenderClient_ReleaseBuffer_t)(UINT32, DWORD);
+
+std::mutex gMtxAudioClients;
+std::mutex gMtxRenderClients;
+static std::set<IAudioClient*> gAudioClients;
+static std::set<IAudioRenderClient*> gRenderClients;
+
+
 class MyAudioClient : public IAudioClient
 {
 public:
 	HRESULT __stdcall MyGetCurrentPadding(UINT32* pNumPaddingFrames)
 	{
-		std::cout << "MyGetCurrentPadding Params:" << std::endl
-			<< "  pNumPaddingFrames: " << pNumPaddingFrames << std::endl;
-		auto pwfx = getInternalWFX();
-		std::cout << "  InternalWFX Data (+" << PWFX_OFFSET << "):" << std::endl
-			<< "    wFormatTag:      " << pwfx->wFormatTag << std::endl
-			<< "    nChannels:       " << pwfx->nChannels << std::endl
-			<< "    nSamplesPerSec:  " << pwfx->nSamplesPerSec << std::endl
-			<< "    nAvgBytesPerSec: " << pwfx->nAvgBytesPerSec << std::endl
-			<< "    nBlockAlign:     " << pwfx->nBlockAlign << std::endl
-			<< "    wBitsPerSample:  " << pwfx->wBitsPerSample << std::endl
-			<< "    cbSize:          " << pwfx->cbSize << std::endl;
+		if (autoSelfRegister())
+			std::cout << "Registered AudioClient 0x" << std::hex << this << std::endl;
 		return (this->*realGetCurrentPadding)(pNumPaddingFrames);
 	}
 private:
+	bool autoSelfRegister()
+	{
+		std::lock_guard lock(gMtxAudioClients);
+		if (gAudioClients.find(this) != gAudioClients.end())
+			return false;
+		gAudioClients.insert(this);
+
+		auto pwfx = getInternalWFX();
+		std::cout << "  Format:" << std::endl
+			<< "    Format:          0x" << std::hex << pwfx->wFormatTag << std::dec << std::endl
+			<< "    Channels:        " << pwfx->nChannels << std::endl
+			<< "    Samplerate:      " << pwfx->nSamplesPerSec << " Hz" << std::endl
+			<< "    BytesPerSec:     " << pwfx->nAvgBytesPerSec << std::endl
+			<< "    Samplesize:      " << pwfx->nBlockAlign << std::endl
+			<< "    BytesPerChannel: " << (pwfx->wBitsPerSample / 8) << std::endl;
+		if (pwfx->wFormatTag != WAVE_FORMAT_PCM && pwfx->cbSize > 0)
+		{
+			auto pwfxx = (WAVEFORMATEXTENSIBLE*)pwfx;
+			std::cout
+				<< "    ValidBitsPerSample: " << pwfxx->Samples.wValidBitsPerSample << std::endl
+				<< "    SamplesPerBlock:    " << pwfxx->Samples.wSamplesPerBlock << std::endl
+				<< "    ChannelMask:        " << pwfxx->dwChannelMask << std::endl
+				<< "    SubFormat:          ";
+			for (int i = 0; i < sizeof(GUID); ++i)
+				std::cout << std::hex << std::setfill('0') << std::setw(2) << (int)*((char*)&pwfxx->SubFormat + i) << " ";
+			std::cout << std::dec << std::endl;
+		}
+		
+		return true;
+	}
 	WAVEFORMATEX* getInternalWFX()
 	{
+		WAVEFORMATEXTENSIBLE;
 		// Pointer to internal waveformatex struct is stored at this+PWFX_OFFSET
 		char* pData = (char*)this;
 		return *(WAVEFORMATEX**)(pData + PWFX_OFFSET);
@@ -52,33 +88,35 @@ public:
 	inline static const MyAudioClient_GetCurrentPadding_t pfMyGetCurrentPadding = &MyAudioClient::MyGetCurrentPadding;
 private:
 	#if defined PAYLOAD_ARCH_x64
-	inline static uint64_t PWFX_OFFSET = 904;
+	inline static const uint64_t PWFX_OFFSET = 904;
 	#elif defined PAYLOAD_ARCH_x86
-	inline static uint64_t PWFX_OFFSET = 660;
+	inline static const uint64_t PWFX_OFFSET = 660;
 	#elif defined PAYLOAD_ARCH_UNKNOWN
-	inline static uint64_t PWFX_OFFSET = 0;
+	inline static const uint64_t PWFX_OFFSET = 0;
 	#endif
 };
 
-class MyAudioRenderClient;
-typedef HRESULT(__stdcall MyAudioRenderClient::* MyAudioRenderClient_GetBuffer_t)(UINT32, BYTE**);
-typedef HRESULT(__stdcall MyAudioRenderClient::* MyAudioRenderClient_ReleaseBuffer_t)(UINT32, DWORD);
 class MyAudioRenderClient : public IAudioRenderClient
 {
 public:
 	HRESULT __stdcall MyGetBuffer(UINT32 NumFramesRequested, BYTE** ppData)
 	{
-		std::cout << "MyGetBuffer Params:" << std::endl
-			<< "  NumFramesRequested: " << NumFramesRequested << std::endl
-			<< "  ppData:             " << ppData << std::endl;
+		if (autoSelfRegister())
+			std::cout << "Registered RenderClient 0x" << std::hex << this << std::endl;
 		return (this->*realGetBuffer)(NumFramesRequested, ppData);
 	}
 	HRESULT __stdcall MyReleaseBuffer(UINT32 NumFramesWritten, DWORD dwFlags)
 	{
-		std::cout << "MyReleaseBuffer Params:" << std::endl
-			<< "  NumFramesWritten: " << NumFramesWritten << std::endl
-			<< "  dwFlags:          " << dwFlags << std::endl;
 		return (this->*realReleaseBuffer)(NumFramesWritten, dwFlags);
+	}
+private:
+	bool autoSelfRegister()
+	{
+		std::lock_guard lock(gMtxRenderClients);
+		if (gRenderClients.find(this) != gRenderClients.end())
+			return false;
+		gRenderClients.insert(this);
+		return true;
 	}
 public:
 	inline static MyAudioRenderClient_GetBuffer_t realGetBuffer = 0; // vtable[3]
