@@ -102,11 +102,14 @@ public:
 	HRESULT __stdcall MyGetBuffer(UINT32 NumFramesRequested, BYTE** ppData)
 	{
 		if (autoSelfRegister())
-			std::cout << "Registered RenderClient 0x" << std::hex << this << std::endl;
-		return (this->*realGetBuffer)(NumFramesRequested, ppData);
+			std::cout << "Registered RenderClient 0x" << std::hex << this << std::dec << std::endl;
+		HRESULT hr = (this->*realGetBuffer)(NumFramesRequested, ppData);
+		BufferData = *ppData;
+		return hr;
 	}
 	HRESULT __stdcall MyReleaseBuffer(UINT32 NumFramesWritten, DWORD dwFlags)
 	{
+		memset(BufferData, 0, NumFramesWritten * (2 * 8));
 		return (this->*realReleaseBuffer)(NumFramesWritten, dwFlags);
 	}
 private:
@@ -119,6 +122,7 @@ private:
 		return true;
 	}
 public:
+	inline static BYTE* BufferData = 0;
 	inline static MyAudioRenderClient_GetBuffer_t realGetBuffer = 0; // vtable[3]
 	inline static const MyAudioRenderClient_GetBuffer_t pfMyGetBuffer = &MyAudioRenderClient::MyGetBuffer;
 	inline static MyAudioRenderClient_ReleaseBuffer_t realReleaseBuffer = 0; // vtable[4]
