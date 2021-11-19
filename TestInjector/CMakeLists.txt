@@ -13,11 +13,13 @@ add_executable(
 target_include_directories(
 	TestInjector PUBLIC
 	"../Carl/include"
+	"../vendor/Detours/src"
 )
 
 target_link_libraries(
 	TestInjector PUBLIC
 	Carl
+	Detours
 )
 
 set_target_properties(

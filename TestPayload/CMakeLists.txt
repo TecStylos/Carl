@@ -8,7 +8,7 @@ set(CMAKE_CXX_STANDARD_REQUIRED TRUE)
 add_library(
 	TestPayload SHARED 
 	"TestPayload.cpp"
-)
+  "MyAudioClient.h" "GetFuncFromObjVTable.h" )
 
 target_link_libraries(
 	TestPayload PUBLIC 
@@ -29,6 +29,11 @@ SET_TARGET_PROPERTIES(
 
 set_target_properties(
 	TestPayload PROPERTIES OUTPUT_NAME "TestPayload_${CARL_ARCHITECTURE}"
+)
+
+target_compile_definitions(
+	TestPayload PUBLIC
+	"PAYLOAD_ARCH_${CARL_ARCHITECTURE}"
 )
 
 if (WIN32)

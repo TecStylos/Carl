@@ -5,7 +5,7 @@
 
 #include "PayloadError.h"
 #include "Platform/Win32ErrorMessage.h"
-
+#include <iostream>
 namespace AgentCarl
 {
 	Win32PayloadHandle::Win32PayloadHandle(const std::string& payloadPath, ProcessID processID)
