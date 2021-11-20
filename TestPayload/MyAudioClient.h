@@ -22,12 +22,6 @@ const IID IID_IAudioClient = __uuidof(IAudioClient);
 const IID IID_IAudioRenderClient = __uuidof(IAudioRenderClient);
 const IID IID_IAudioStreamVolume = __uuidof(IAudioStreamVolume);
 
-#define CARL_METHOD_SETUP(className, retType, methodName, ...) \
-typedef retType(__stdcall className::* methodName##_t)(__VA_ARGS__); \
-typedef retType(* Cb##methodName##_t)(className* pIntance, __VA_ARGS__); \
-inline static CarlDetourRef<methodName##_t> sDetour##methodName = nullptr; \
-static retType(*sCb##methodName)(className* pIntance, __VA_ARGS__)
-
 class MyAudioClient : public IAudioClient
 {
 public:
@@ -131,6 +125,8 @@ void destroyDummyAudioClient(IAudioClient* pAudioClient)
 
 IAudioRenderClient* createDummyAudioRenderClient(IAudioClient* pAudioClient)
 {
+	if (!pAudioClient)
+		return nullptr;
 	HRESULT hr = ERROR_SUCCESS;
 	
 	IAudioRenderClient* pAudioRenderClient = nullptr;
@@ -144,29 +140,41 @@ IAudioRenderClient* createDummyAudioRenderClient(IAudioClient* pAudioClient)
 
 void destroyDummyAudioRenderClient(IAudioRenderClient* pClient)
 {
+	if (!pClient)
+		return;
 	pClient->Release();
 }
 
-void makeAudioRenderClientDetours()
+bool makeAudioRenderClientDetours()
 {
 	IAudioClient* pAudioClient = createDummyAudioClient();
-	IAudioRenderClient* pAudioRenderClient = createDummyAudioRenderClient(pAudioClient);
+	if (!pAudioClient)
+		goto ErrExit;
 
-	MyAudioClient::sDetourGetCurrentPadding = std::make_shared<CarlDetour<MyAudioClient::GetCurrentPadding_t>>(
-		GetFuncFromObjVTable<MyAudioClient::GetCurrentPadding_t>(pAudioClient, 6),
-		&MyAudioClient::MyGetCurrentPadding
-		);
-	MyAudioRenderClient::sDetourGetBuffer = std::make_shared<CarlDetour<MyAudioRenderClient::GetBuffer_t>>(
-		GetFuncFromObjVTable<MyAudioRenderClient::GetBuffer_t>(pAudioRenderClient, 3),
-		&MyAudioRenderClient::MyGetBuffer
-		);
-	MyAudioRenderClient::sDetourReleaseBuffer = std::make_shared<CarlDetour<MyAudioRenderClient::ReleaseBuffer_t>>(
-		GetFuncFromObjVTable<MyAudioRenderClient::ReleaseBuffer_t>(pAudioRenderClient, 4),
-		&MyAudioRenderClient::MyReleaseBuffer
-		);
+	IAudioRenderClient* pAudioRenderClient = createDummyAudioRenderClient(pAudioClient);
+	if (!pAudioRenderClient)
+		goto ErrExit;
+
+	CREATE_CARL_DETOUR_REF(MyAudioClient, GetCurrentPadding, GetFuncFromObjVTable<MyAudioClient::GetCurrentPadding_t>(pAudioClient, 6));
+	CREATE_CARL_DETOUR_REF(MyAudioRenderClient, GetBuffer, GetFuncFromObjVTable<MyAudioRenderClient::GetBuffer_t>(pAudioRenderClient, 3));
+	CREATE_CARL_DETOUR_REF(MyAudioRenderClient, ReleaseBuffer, GetFuncFromObjVTable<MyAudioRenderClient::ReleaseBuffer_t>(pAudioRenderClient, 4));
+
+	if (!MyAudioClient::sDetourGetCurrentPadding->isDetoured() ||
+		!MyAudioRenderClient::sDetourGetBuffer->isDetoured() ||
+		!MyAudioRenderClient::sDetourReleaseBuffer->isDetoured()
+		)
+		goto ErrExit;
 
 	destroyDummyAudioRenderClient(pAudioRenderClient);
 	destroyDummyAudioClient(pAudioClient);
+	return true;
+ErrExit:
+	destroyDummyAudioRenderClient(pAudioRenderClient);
+	destroyDummyAudioClient(pAudioClient);
+	MyAudioClient::sDetourGetCurrentPadding.reset();
+	MyAudioRenderClient::sDetourGetBuffer.reset();
+	MyAudioRenderClient::sDetourReleaseBuffer.reset();
+	return false;
 }
 
 uint64_t SearchWaveFormatExPtrInAudioClient(IAudioClient* pAudioClient)

@@ -55,3 +55,12 @@ private:
 };
 template <typename Function_t>
 using CarlDetourRef = std::shared_ptr<CarlDetour<Function_t>>;
+
+#define CARL_METHOD_SETUP(className, retType, methodName, ...) \
+typedef retType(__stdcall className::* methodName##_t)(__VA_ARGS__); \
+typedef retType(* Cb##methodName##_t)(className* pIntance, __VA_ARGS__); \
+inline static CarlDetourRef<methodName##_t> sDetour##methodName = nullptr; \
+static retType(*sCb##methodName)(className* pIntance, __VA_ARGS__)
+
+#define CREATE_CARL_DETOUR_REF(className, funcName, realAddr) \
+className::sDetour##funcName = std::make_shared<CarlDetour<className::funcName##_t>>((realAddr), &className::My##funcName)
