@@ -1,10 +1,7 @@
 #pragma once
 
-#include <iostream>
-#include <iomanip>
 #include <set>
-#include <map>
-#include <mutex>
+#include <iostream>
 
 #include <Audioclient.h>
 #include <mmdeviceapi.h>
@@ -16,11 +13,12 @@
 #define PAYLOAD_ARCH_UNKNOWN
 #endif
 
-const CLSID CLSID_MMDeviceEnumerator = __uuidof(MMDeviceEnumerator);
-const IID IID_IMMDeviceEnumerator = __uuidof(IMMDeviceEnumerator);
-const IID IID_IAudioClient = __uuidof(IAudioClient);
-const IID IID_IAudioRenderClient = __uuidof(IAudioRenderClient);
-const IID IID_IAudioStreamVolume = __uuidof(IAudioStreamVolume);
+const CLSID CLSID_MMDeviceEnumerator  = __uuidof(MMDeviceEnumerator);
+const IID     IID_IMMDeviceEnumerator = __uuidof(IMMDeviceEnumerator);
+const IID     IID_IAudioClient        = __uuidof(IAudioClient);
+const IID     IID_IAudioRenderClient  = __uuidof(IAudioRenderClient);
+const IID     IID_IAudioCaptureClient = __uuidof(IAudioCaptureClient);
+const IID     IID_IAudioStreamVolume  = __uuidof(IAudioStreamVolume);
 
 class MyAudioClient : public IAudioClient
 {
@@ -64,7 +62,22 @@ public:
 	inline static BYTE* BufferData = 0;
 };
 
-IAudioClient* createDummyAudioClient()
+class MyAudioCaptureClient : public IAudioCaptureClient
+{
+public:
+	CARL_METHOD_SETUP(MyAudioCaptureClient, HRESULT, GetBuffer, BYTE** ppData, UINT32* pNumFramesToRead, DWORD* pdwFlags, UINT64* pu64DevicePosition, UINT64* pu64QPCPosition);
+	HRESULT __stdcall MyGetBuffer(BYTE** ppData, UINT32* pNumFramesToRead, DWORD* pdwFlags, UINT64* pu64DevicePosition, UINT64* pu64QPCPosition)
+	{
+		return sCbGetBuffer(this, ppData, pNumFramesToRead, pdwFlags, pu64DevicePosition, pu64QPCPosition);
+	}
+	CARL_METHOD_SETUP(MyAudioCaptureClient, HRESULT, ReleaseBuffer, UINT32 NumFramesRead);
+	HRESULT __stdcall MyReleaseBuffer(UINT32 NumFramesRead)
+	{
+		return sCbReleaseBuffer(this, NumFramesRead);
+	}
+};
+
+IAudioClient* createDummyAudioClient(EDataFlow dataFlow)
 {
 	HRESULT hr = ERROR_SUCCESS;
 	hr = CoInitialize(NULL);
@@ -84,7 +97,7 @@ IAudioClient* createDummyAudioClient()
 		return nullptr;
 
 	hr = pEnumerator->GetDefaultAudioEndpoint(
-		eRender, eConsole, &pDevice
+		dataFlow, eConsole, &pDevice
 	);
 	if (!SUCCEEDED(hr))
 		return nullptr;
@@ -138,7 +151,29 @@ IAudioRenderClient* createDummyAudioRenderClient(IAudioClient* pAudioClient)
 	return pAudioRenderClient;
 }
 
+IAudioCaptureClient* createDummyAudioCaptureClient(IAudioClient* pAudioClient)
+{
+	if (!pAudioClient)
+		return nullptr;
+	HRESULT hr = ERROR_SUCCESS;
+
+	IAudioCaptureClient* pAudioCaptureClient = nullptr;
+
+	hr = pAudioClient->GetService(IID_IAudioCaptureClient, (void**)&pAudioCaptureClient);
+	if (!SUCCEEDED(hr))
+		return nullptr;
+
+	return pAudioCaptureClient;
+}
+
 void destroyDummyAudioRenderClient(IAudioRenderClient* pClient)
+{
+	if (!pClient)
+		return;
+	pClient->Release();
+}
+
+void destroyDummyAudioCaptureClient(IAudioCaptureClient* pClient)
 {
 	if (!pClient)
 		return;
@@ -147,33 +182,52 @@ void destroyDummyAudioRenderClient(IAudioRenderClient* pClient)
 
 bool makeAudioRenderClientDetours()
 {
-	IAudioClient* pAudioClient = createDummyAudioClient();
-	if (!pAudioClient)
+	IAudioClient* pAudioClientForRender = createDummyAudioClient(eRender);
+	if (!pAudioClientForRender)
 		goto ErrExit;
 
-	IAudioRenderClient* pAudioRenderClient = createDummyAudioRenderClient(pAudioClient);
+	IAudioRenderClient* pAudioRenderClient = createDummyAudioRenderClient(pAudioClientForRender);
 	if (!pAudioRenderClient)
 		goto ErrExit;
 
-	CREATE_CARL_DETOUR_REF(MyAudioClient, GetCurrentPadding, GetFuncFromObjVTable<MyAudioClient::GetCurrentPadding_t>(pAudioClient, 6));
+	IAudioClient* pAudioClientForCapture = createDummyAudioClient(eCapture);
+	if (!pAudioClientForCapture)
+		goto ErrExit;
+
+	IAudioCaptureClient* pAudioCaptureClient = createDummyAudioCaptureClient(pAudioClientForCapture);
+	if (!pAudioCaptureClient)
+		goto ErrExit;
+
+	CREATE_CARL_DETOUR_REF(MyAudioClient, GetCurrentPadding, GetFuncFromObjVTable<MyAudioClient::GetCurrentPadding_t>(pAudioClientForRender, 6));
 	CREATE_CARL_DETOUR_REF(MyAudioRenderClient, GetBuffer, GetFuncFromObjVTable<MyAudioRenderClient::GetBuffer_t>(pAudioRenderClient, 3));
 	CREATE_CARL_DETOUR_REF(MyAudioRenderClient, ReleaseBuffer, GetFuncFromObjVTable<MyAudioRenderClient::ReleaseBuffer_t>(pAudioRenderClient, 4));
+	CREATE_CARL_DETOUR_REF(MyAudioCaptureClient, GetBuffer, GetFuncFromObjVTable<MyAudioCaptureClient::GetBuffer_t>(pAudioCaptureClient, 3));
+	CREATE_CARL_DETOUR_REF(MyAudioCaptureClient, ReleaseBuffer, GetFuncFromObjVTable<MyAudioCaptureClient::ReleaseBuffer_t>(pAudioCaptureClient, 4));
 
 	if (!MyAudioClient::sDetourGetCurrentPadding->isDetoured() ||
 		!MyAudioRenderClient::sDetourGetBuffer->isDetoured() ||
-		!MyAudioRenderClient::sDetourReleaseBuffer->isDetoured()
+		!MyAudioRenderClient::sDetourReleaseBuffer->isDetoured() ||
+		!MyAudioCaptureClient::sDetourGetBuffer->isDetoured() ||
+		!MyAudioCaptureClient::sDetourReleaseBuffer->isDetoured()
 		)
 		goto ErrExit;
 
 	destroyDummyAudioRenderClient(pAudioRenderClient);
-	destroyDummyAudioClient(pAudioClient);
+	destroyDummyAudioCaptureClient(pAudioCaptureClient);
+	destroyDummyAudioClient(pAudioClientForRender);
+	destroyDummyAudioClient(pAudioClientForCapture);
 	return true;
 ErrExit:
 	destroyDummyAudioRenderClient(pAudioRenderClient);
-	destroyDummyAudioClient(pAudioClient);
+	destroyDummyAudioCaptureClient(pAudioCaptureClient);
+	destroyDummyAudioClient(pAudioClientForRender);
+	destroyDummyAudioClient(pAudioClientForCapture);
+
 	MyAudioClient::sDetourGetCurrentPadding.reset();
 	MyAudioRenderClient::sDetourGetBuffer.reset();
 	MyAudioRenderClient::sDetourReleaseBuffer.reset();
+	MyAudioCaptureClient::sDetourGetBuffer.reset();
+	MyAudioCaptureClient::sDetourReleaseBuffer.reset();
 	return false;
 }
 

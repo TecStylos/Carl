@@ -19,7 +19,7 @@ namespace Carl
 	}
 
 	PayloadConnector::PayloadConnector()
-		: m_acceptor("0", _internalSessionInitFunc, this, nullptr, EHSN::crypto::defaultRDG, 1024)
+		: m_acceptor("0", _internalSessionInitFunc, this, nullptr, EHSN::crypto::defaultRDG, 4096)
 	{}
 
 	void PayloadConnector::accept()

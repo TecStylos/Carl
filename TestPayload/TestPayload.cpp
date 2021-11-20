@@ -1,11 +1,13 @@
 #include <CarlPayload.h>
 
 #include <iostream>
+#include <iomanip>
 #include <string>
-#include <fstream>
 
 #include "MyAudioClient.h"
 #include "CarlEntryPoint.h"
+
+static EHSN::net::ManagedSocketRef manSockRef = nullptr;
 
 namespace Carl
 {
@@ -17,25 +19,27 @@ namespace Carl
 
 		makeAudioRenderClientDetours();
 
-		EHSN::net::ManagedSocket queue(std::make_shared<EHSN::net::SecSocket>(EHSN::crypto::defaultRDG, 0));
+		manSockRef = std::make_shared<EHSN::net::ManagedSocket>(std::make_shared<EHSN::net::SecSocket>(EHSN::crypto::defaultRDG, 0));
 
 		uint8_t connectCount = 0;
-		while (!queue.isConnected() && connectCount++ < 8)
-			queue.connect("localhost", port, true);
+		while (!manSockRef->isConnected() && connectCount++ < 8)
+			manSockRef->connect("localhost", port, true);
 
-		if (!queue.isConnected())
+		if (!manSockRef->isConnected())
 			return -1;
 
 		std::cout << "Connected to host!" << std::endl;
 
-		while (queue.isConnected())
+		while (manSockRef->isConnected())
 		{
-			auto pack = queue.pull(Carl::PT_ECHO_REQUEST);
+			auto pack = manSockRef->pull(Carl::PT_ECHO_REQUEST);
 			if (!pack.buffer)
 				break;
 			std::string line = (char*)pack.buffer->data();
 			std::cout << line << std::endl;
 		}
+
+		manSockRef.reset();
 
 		return 0;
 	}
@@ -43,10 +47,10 @@ namespace Carl
 
 std::mutex gMtxAudioClients;
 std::mutex gMtxRenderClients;
-static std::map<IAudioClient*, WAVEFORMATEX*> gAudioClients;
-static std::set<IAudioRenderClient*> gRenderClients;
-
-std::ofstream outFileStream;
+std::mutex gMtxCaptureClients;
+static std::map<MyAudioClient*, WAVEFORMATEX*> gAudioClients;
+static std::set<MyAudioRenderClient*> gRenderClients;
+static std::set<MyAudioCaptureClient*> gCaptureClients;
 
 bool autoRegisterAudioClient(MyAudioClient* pClient)
 {
@@ -77,8 +81,6 @@ bool autoRegisterAudioClient(MyAudioClient* pClient)
 
 	gAudioClients.insert({ pClient, pwfx });
 
-	outFileStream = std::ofstream("C:\\Users\\tecst\\Desktop\\output.raw", std::ios::binary | std::ios::out | std::ios::trunc);
-
 	return true;
 }
 
@@ -88,6 +90,15 @@ bool autoRegisterAudioRenderClient(MyAudioRenderClient* pClient)
 	if (gRenderClients.find(pClient) != gRenderClients.end())
 		return false;
 	gRenderClients.insert(pClient);
+	return true;
+}
+
+bool autoRegisterAudioCaptureClient(MyAudioCaptureClient* pClient)
+{
+	std::lock_guard lock(gMtxCaptureClients);
+	if (gCaptureClients.find(pClient) != gCaptureClients.end())
+		return false;
+	gCaptureClients.insert(pClient);
 	return true;
 }
 
@@ -107,12 +118,29 @@ MyAudioRenderClient::CbGetBuffer_t MyAudioRenderClient::sCbGetBuffer = [](MyAudi
 };
 
 MyAudioRenderClient::CbReleaseBuffer_t MyAudioRenderClient::sCbReleaseBuffer = [](MyAudioRenderClient* pClient, UINT32 NumFramesWritten, DWORD dwFlags) {
-	if (gRenderClients.find(pClient) == gRenderClients.begin() && !gAudioClients.empty())
+	if (gRenderClients.find(pClient) == gRenderClients.begin() &&
+		!gAudioClients.empty() &&
+		manSockRef.get() != nullptr &&
+		manSockRef->isConnected()
+		)
 	{
 		auto pwfx = gAudioClients.begin()->second;
 		uint64_t frameSize = pwfx->nChannels * (pwfx->wBitsPerSample / 8);
-		outFileStream.write((char*)BufferData, NumFramesWritten * frameSize);
-		outFileStream.flush();
+
+		auto buffer = std::make_shared<EHSN::net::PacketBuffer>(NumFramesWritten * frameSize);
+		buffer->write(BufferData, NumFramesWritten * frameSize, 0);
+		manSockRef->push(Carl::PT_RENDER_FRAME, EHSN::net::FLAG_PH_NONE, buffer);
 	}
 	return sDetourReleaseBuffer->callReal<HRESULT>(pClient, NumFramesWritten, dwFlags);
+};
+
+MyAudioCaptureClient::CbGetBuffer_t MyAudioCaptureClient::sCbGetBuffer = [](MyAudioCaptureClient* pClient, BYTE** ppData, UINT32* pNumFramesToRead, DWORD* pdwFlags, UINT64* pu64DevicePosition, UINT64* pu64QPCPosition) {
+	if (autoRegisterAudioCaptureClient(pClient))
+		std::cout << "Registered CaptureClient 0x" << std::hex << pClient << std::dec << std::endl;
+	HRESULT hr = sDetourGetBuffer->callReal<HRESULT>(pClient, ppData, pNumFramesToRead, pdwFlags, pu64DevicePosition, pu64QPCPosition);
+	return hr;
+};
+
+MyAudioCaptureClient::CbReleaseBuffer_t MyAudioCaptureClient::sCbReleaseBuffer = [](MyAudioCaptureClient* pClient, UINT32 NumFramesRead) {
+	return sDetourReleaseBuffer->callReal<HRESULT>(pClient, NumFramesRead);
 };

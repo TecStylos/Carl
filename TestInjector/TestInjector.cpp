@@ -4,6 +4,19 @@
 #include <CarlPayload.h>
 #include <set>
 
+#include <fstream>
+
+std::ofstream outFileStream;
+
+void RenderFrameCallback(EHSN::net::Packet pack, uint64_t nBytesReceived, void* pParam)
+{
+	if (nBytesReceived < pack.header.packetSize)
+		return;
+
+	outFileStream.write((const char*)pack.buffer->data(), nBytesReceived);
+	outFileStream.flush();
+}
+
 int main()
 {
 	std::string agentDir = "..\\..\\..\\bintools\\Debug\\";
@@ -22,7 +35,7 @@ int main()
 	{
 		pc = Carl::injectPayload(agentDir, targetPID, payloadPath);
 	}
-	catch (Carl::CarlError& err)
+	catch (const Carl::CarlError& err)
 	{
 		std::cout << "ERROR: " << err.what() << std::endl;
 		return -1;
@@ -31,6 +44,9 @@ int main()
 	std::cout << "PayloadConnector port: " << pc->getPort() << std::endl;
 
 	auto queue = pc->getQueue();
+
+	outFileStream = std::ofstream("C:\\Users\\tecst\\Desktop\\output.raw", std::ios::binary | std::ios::out | std::ios::trunc);
+	queue->setRecvCallback(Carl::PT_RENDER_FRAME, RenderFrameCallback, nullptr);
 
 	while (queue->isConnected())
 	{
