@@ -32,8 +32,11 @@ typedef HRESULT(__stdcall MyAudioRenderClient::* MyAudioRenderClient_ReleaseBuff
 
 std::mutex gMtxAudioClients;
 std::mutex gMtxRenderClients;
-static std::set<IAudioClient*> gAudioClients;
+static std::map<IAudioClient*, WAVEFORMATEX*> gAudioClients;
 static std::set<IAudioRenderClient*> gRenderClients;
+
+#include <fstream>
+std::ofstream outFileStream;
 
 
 class MyAudioClient : public IAudioClient
@@ -51,7 +54,6 @@ private:
 		std::lock_guard lock(gMtxAudioClients);
 		if (gAudioClients.find(this) != gAudioClients.end())
 			return false;
-		gAudioClients.insert(this);
 
 		auto pwfx = getInternalWFX();
 		std::cout << "  Format:" << std::endl
@@ -73,6 +75,10 @@ private:
 				std::cout << std::hex << std::setfill('0') << std::setw(2) << (int)*((char*)&pwfxx->SubFormat + i) << " ";
 			std::cout << std::dec << std::endl;
 		}
+
+		gAudioClients.insert({ this, pwfx });
+
+		outFileStream = std::ofstream("C:\\Users\\tecst\\Desktop\\output.raw", std::ios::binary | std::ios::out | std::ios::trunc);
 		
 		return true;
 	}
@@ -109,7 +115,13 @@ public:
 	}
 	HRESULT __stdcall MyReleaseBuffer(UINT32 NumFramesWritten, DWORD dwFlags)
 	{
-		memset(BufferData, 0, NumFramesWritten * (2 * 8));
+		if (gRenderClients.find(this) == gRenderClients.begin() && !gAudioClients.empty())
+		{
+			auto pwfx = gAudioClients.begin()->second;
+			uint64_t frameSize = pwfx->nChannels * (pwfx->wBitsPerSample / 8);
+			outFileStream.write((char*)BufferData, NumFramesWritten * frameSize);
+			outFileStream.flush();
+		}
 		return (this->*realReleaseBuffer)(NumFramesWritten, dwFlags);
 	}
 private:
