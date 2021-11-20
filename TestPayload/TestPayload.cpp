@@ -17,8 +17,6 @@ namespace Carl
 	{
 		std::string port = (char*)param;
 
-		makeAudioRenderClientDetours();
-
 		manSockRef = std::make_shared<EHSN::net::ManagedSocket>(std::make_shared<EHSN::net::SecSocket>(EHSN::crypto::defaultRDG, 0));
 
 		uint8_t connectCount = 0;
@@ -29,6 +27,8 @@ namespace Carl
 			return -1;
 
 		std::cout << "Connected to host!" << std::endl;
+
+		makeAudioRenderClientDetours();
 
 		while (manSockRef->isConnected())
 		{
@@ -80,6 +80,15 @@ bool autoRegisterAudioClient(MyAudioClient* pClient)
 	}
 
 	gAudioClients.insert({ pClient, pwfx });
+
+	if (manSockRef.get() != nullptr &&
+		manSockRef->isConnected()
+		)
+	{
+		auto buffer = std::make_shared<EHSN::net::PacketBuffer>(sizeof(WAVEFORMATEX));
+		buffer->write(*pwfx);
+		manSockRef->push(Carl::PT_WAVEFORMATEX, EHSN::net::FLAG_PH_NONE, buffer);
+	}
 
 	return true;
 }

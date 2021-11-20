@@ -10,5 +10,6 @@ namespace Carl
 		PT_ECHO_REPLY,
 		PT_RENDER_FRAME,
 		PT_CAPTURE_FRAME,
+		PT_WAVEFORMATEX,
 	};
 }
