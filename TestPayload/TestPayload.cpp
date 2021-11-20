@@ -1,103 +1,118 @@
 #include <CarlPayload.h>
 
 #include <iostream>
-#include <Windows.h>
 #include <string>
-
-#include <detours.h>
+#include <fstream>
 
 #include "MyAudioClient.h"
+#include "CarlEntryPoint.h"
 
-HMODULE DLL_MODULE_HANDLE = nullptr;
-LONG TRANS_COMMIT = 0;
-
-
-BOOL WINAPI DllMain(
-	HINSTANCE hInstDll,
-	DWORD fdwReason,
-	LPVOID lpReserved
-)
+namespace Carl
 {
-	if (DetourIsHelperProcess())
-		return TRUE;
+	bool CreateConsole = true;
 
-	switch (fdwReason)
+	int MainFunc(void* param)
 	{
-	case DLL_PROCESS_ATTACH:
-		DLL_MODULE_HANDLE = hInstDll;
-		DisableThreadLibraryCalls(hInstDll);
-		DetourRestoreAfterWith();
-		break;
-	case DLL_THREAD_ATTACH:
-		break;
-	case DLL_THREAD_DETACH:
-		break;
-	case DLL_PROCESS_DETACH:
-		break;
-	}
+		std::string port = (char*)param;
 
-	return TRUE;
-}
+		makeAudioRenderClientDetours();
 
-void selfDetach()
-{
-	if (!DLL_MODULE_HANDLE)
-		return;
+		EHSN::net::ManagedSocket queue(std::make_shared<EHSN::net::SecSocket>(EHSN::crypto::defaultRDG, 0));
 
-	FreeLibraryAndExitThread(DLL_MODULE_HANDLE, 0);
-}
+		uint8_t connectCount = 0;
+		while (!queue.isConnected() && connectCount++ < 8)
+			queue.connect("localhost", port, true);
 
-void mainFunc(std::string port)
-{
-	makeAudioRenderClientDetours();
+		if (!queue.isConnected())
+			return -1;
 
-	EHSN::net::ManagedSocket queue(std::make_shared<EHSN::net::SecSocket>(EHSN::crypto::defaultRDG, 0));
+		std::cout << "Connected to host!" << std::endl;
 
-	uint8_t connectCount = 0;
-	while (!queue.isConnected() && connectCount++ < 8)
-		queue.connect("localhost", port, true);
+		while (queue.isConnected())
+		{
+			auto pack = queue.pull(Carl::PT_ECHO_REQUEST);
+			if (!pack.buffer)
+				break;
+			std::string line = (char*)pack.buffer->data();
+			std::cout << line << std::endl;
+		}
 
-	if (!queue.isConnected())
-		return;
-
-	std::cout << "Connected to host!" << std::endl;
-
-	while (queue.isConnected())
-	{
-		auto pack = queue.pull(Carl::PT_ECHO_REQUEST);
-		if (!pack.buffer)
-			break;
-		std::string line = (char*)pack.buffer->data();
-		std::cout << line << std::endl;
+		return 0;
 	}
 }
 
-extern "C" DWORD WINAPI mainFuncThread(void* param)
+std::mutex gMtxAudioClients;
+std::mutex gMtxRenderClients;
+static std::map<IAudioClient*, WAVEFORMATEX*> gAudioClients;
+static std::set<IAudioRenderClient*> gRenderClients;
+
+std::ofstream outFileStream;
+
+bool autoRegisterAudioClient(MyAudioClient* pClient)
 {
-	bool allocatedConsole = false;
-	if (AllocConsole())
+	std::lock_guard lock(gMtxAudioClients);
+	if (gAudioClients.find(pClient) != gAudioClients.end())
+		return false;
+
+	auto pwfx = pClient->getInternalWFX();
+	std::cout << "  Format:" << std::endl
+		<< "    Format:          0x" << std::hex << pwfx->wFormatTag << std::dec << std::endl
+		<< "    Channels:        " << pwfx->nChannels << std::endl
+		<< "    Samplerate:      " << pwfx->nSamplesPerSec << " Hz" << std::endl
+		<< "    BytesPerSec:     " << pwfx->nAvgBytesPerSec << std::endl
+		<< "    Samplesize:      " << pwfx->nBlockAlign << std::endl
+		<< "    BytesPerChannel: " << (pwfx->wBitsPerSample / 8) << std::endl;
+	if (pwfx->wFormatTag != WAVE_FORMAT_PCM && pwfx->cbSize > 0)
 	{
-		allocatedConsole = true;
-		FILE *temp;
-		freopen_s(&temp, "CONOUT$", "w", stdout);
-		freopen_s(&temp, "CONIN$", "r", stdin);
+		auto pwfxx = (WAVEFORMATEXTENSIBLE*)pwfx;
+		std::cout
+			<< "    ValidBitsPerSample: " << pwfxx->Samples.wValidBitsPerSample << std::endl
+			<< "    SamplesPerBlock:    " << pwfxx->Samples.wSamplesPerBlock << std::endl
+			<< "    ChannelMask:        " << pwfxx->dwChannelMask << std::endl
+			<< "    SubFormat:          ";
+		for (int i = 0; i < sizeof(GUID); ++i)
+			std::cout << std::hex << std::setfill('0') << std::setw(2) << (int)*((char*)&pwfxx->SubFormat + i) << " ";
+		std::cout << std::dec << std::endl;
 	}
 
-	std::string paramStr = (char*)param;
-	mainFunc(paramStr);
+	gAudioClients.insert({ pClient, pwfx });
 
-	if (allocatedConsole)
-	{
-		FreeConsole();
-	}
+	outFileStream = std::ofstream("C:\\Users\\tecst\\Desktop\\output.raw", std::ios::binary | std::ios::out | std::ios::trunc);
 
-	selfDetach();
-	return 0;
+	return true;
 }
 
-extern "C" __declspec(dllexport) DWORD WINAPI connectToHost(void* param)
+bool autoRegisterAudioRenderClient(MyAudioRenderClient* pClient)
 {
-	#pragma comment(linker, "/EXPORT:" __FUNCTION__ "=" __FUNCDNAME__)
-	CreateThread(NULL, 0, mainFuncThread, param, 0, NULL);
-	return 0;
+	std::lock_guard lock(gMtxRenderClients);
+	if (gRenderClients.find(pClient) != gRenderClients.end())
+		return false;
+	gRenderClients.insert(pClient);
+	return true;
 }
+
+MyAudioClient::CbGetCurrentPadding_t MyAudioClient::sCbGetCurrentPadding = [](MyAudioClient* pClient, UINT32* pNumPaddingFrames) {
+	if (autoRegisterAudioClient(pClient))
+		std::cout << "Registered AudioClient 0x" << std::hex << pClient << std::endl;
+	return sDetourGetCurrentPadding->callReal<HRESULT>(pClient, pNumPaddingFrames);
+};
+
+MyAudioRenderClient::CbGetBuffer_t MyAudioRenderClient::sCbGetBuffer = [](MyAudioRenderClient* pClient, UINT32 NumFramesRequested, BYTE** ppData) {
+
+	if (autoRegisterAudioRenderClient(pClient))
+		std::cout << "Registered RenderClient 0x" << std::hex << pClient << std::dec << std::endl;
+	HRESULT hr = sDetourGetBuffer->callReal<HRESULT>(pClient, NumFramesRequested, ppData);
+	BufferData = *ppData;
+	return hr;
+};
+
+MyAudioRenderClient::CbReleaseBuffer_t MyAudioRenderClient::sCbReleaseBuffer = [](MyAudioRenderClient* pClient, UINT32 NumFramesWritten, DWORD dwFlags) {
+	if (gRenderClients.find(pClient) == gRenderClients.begin() && !gAudioClients.empty())
+	{
+		auto pwfx = gAudioClients.begin()->second;
+		uint64_t frameSize = pwfx->nChannels * (pwfx->wBitsPerSample / 8);
+		outFileStream.write((char*)BufferData, NumFramesWritten * frameSize);
+		outFileStream.flush();
+	}
+	return sDetourReleaseBuffer->callReal<HRESULT>(pClient, NumFramesWritten, dwFlags);
+};

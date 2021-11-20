@@ -4,14 +4,8 @@
 #include <CarlPayload.h>
 #include <set>
 
-#include "../TestPayload/MyAudioClient.h"
-
 int main()
 {
-	//auto pClient = createDummyAudioClient();
-	//SearchWaveFormatExPtrInAudioClient(pClient);
-	//destroyDummyAudioClient(pClient);
-
 	std::string agentDir = "..\\..\\..\\bintools\\Debug\\";
 
 	std::cout << "Target PID: ";

@@ -16,79 +16,33 @@
 #define PAYLOAD_ARCH_UNKNOWN
 #endif
 
-
 const CLSID CLSID_MMDeviceEnumerator = __uuidof(MMDeviceEnumerator);
 const IID IID_IMMDeviceEnumerator = __uuidof(IMMDeviceEnumerator);
 const IID IID_IAudioClient = __uuidof(IAudioClient);
 const IID IID_IAudioRenderClient = __uuidof(IAudioRenderClient);
 const IID IID_IAudioStreamVolume = __uuidof(IAudioStreamVolume);
 
-class MyAudioClient;
-class MyAudioRenderClient;
-
-typedef HRESULT(__stdcall MyAudioClient::* MyAudioClient_GetCurrentPadding_t)(UINT32*);
-typedef HRESULT(__stdcall MyAudioRenderClient::* MyAudioRenderClient_GetBuffer_t)(UINT32, BYTE**);
-typedef HRESULT(__stdcall MyAudioRenderClient::* MyAudioRenderClient_ReleaseBuffer_t)(UINT32, DWORD);
-
-std::mutex gMtxAudioClients;
-std::mutex gMtxRenderClients;
-static std::map<IAudioClient*, WAVEFORMATEX*> gAudioClients;
-static std::set<IAudioRenderClient*> gRenderClients;
-
-#include <fstream>
-std::ofstream outFileStream;
+#define CARL_METHOD_SETUP(className, retType, methodName, ...) \
+typedef retType(__stdcall className::* methodName##_t)(__VA_ARGS__); \
+typedef retType(* Cb##methodName##_t)(className* pIntance, __VA_ARGS__); \
+inline static CarlDetourRef<methodName##_t> sDetour##methodName = nullptr; \
+static retType(*sCb##methodName)(className* pIntance, __VA_ARGS__)
 
 class MyAudioClient : public IAudioClient
 {
 public:
+	CARL_METHOD_SETUP(MyAudioClient, HRESULT, GetCurrentPadding, UINT32* pNumPaddingFrames);
 	HRESULT __stdcall MyGetCurrentPadding(UINT32* pNumPaddingFrames)
 	{
-		if (autoSelfRegister())
-			std::cout << "Registered AudioClient 0x" << std::hex << this << std::endl;
-		return (this->*(sDetourGetCurrentPadding->getRealFunc()))(pNumPaddingFrames);
+		return sCbGetCurrentPadding(this, pNumPaddingFrames);
 	}
-private:
-	bool autoSelfRegister()
-	{
-		std::lock_guard lock(gMtxAudioClients);
-		if (gAudioClients.find(this) != gAudioClients.end())
-			return false;
-
-		auto pwfx = getInternalWFX();
-		std::cout << "  Format:" << std::endl
-			<< "    Format:          0x" << std::hex << pwfx->wFormatTag << std::dec << std::endl
-			<< "    Channels:        " << pwfx->nChannels << std::endl
-			<< "    Samplerate:      " << pwfx->nSamplesPerSec << " Hz" << std::endl
-			<< "    BytesPerSec:     " << pwfx->nAvgBytesPerSec << std::endl
-			<< "    Samplesize:      " << pwfx->nBlockAlign << std::endl
-			<< "    BytesPerChannel: " << (pwfx->wBitsPerSample / 8) << std::endl;
-		if (pwfx->wFormatTag != WAVE_FORMAT_PCM && pwfx->cbSize > 0)
-		{
-			auto pwfxx = (WAVEFORMATEXTENSIBLE*)pwfx;
-			std::cout
-				<< "    ValidBitsPerSample: " << pwfxx->Samples.wValidBitsPerSample << std::endl
-				<< "    SamplesPerBlock:    " << pwfxx->Samples.wSamplesPerBlock << std::endl
-				<< "    ChannelMask:        " << pwfxx->dwChannelMask << std::endl
-				<< "    SubFormat:          ";
-			for (int i = 0; i < sizeof(GUID); ++i)
-				std::cout << std::hex << std::setfill('0') << std::setw(2) << (int)*((char*)&pwfxx->SubFormat + i) << " ";
-			std::cout << std::dec << std::endl;
-		}
-
-		gAudioClients.insert({ this, pwfx });
-
-		outFileStream = std::ofstream("C:\\Users\\tecst\\Desktop\\output.raw", std::ios::binary | std::ios::out | std::ios::trunc);
-		
-		return true;
-	}
+public:
 	WAVEFORMATEX* getInternalWFX()
 	{
 		// Pointer to internal waveformatex struct is stored at this+PWFX_OFFSET
 		char* pData = (char*)this;
 		return *(WAVEFORMATEX**)(pData + PWFX_OFFSET);
 	}
-public:
-	inline static CarlDetourRef<MyAudioClient_GetCurrentPadding_t> sDetourGetCurrentPadding = nullptr;
 private:
 	#if defined PAYLOAD_ARCH_x64
 	inline static const uint64_t PWFX_OFFSET = 904;
@@ -102,38 +56,18 @@ private:
 class MyAudioRenderClient : public IAudioRenderClient
 {
 public:
+	CARL_METHOD_SETUP(MyAudioRenderClient, HRESULT, GetBuffer, UINT32 NumFramesRequested, BYTE** ppData);
 	HRESULT __stdcall MyGetBuffer(UINT32 NumFramesRequested, BYTE** ppData)
 	{
-		if (autoSelfRegister())
-			std::cout << "Registered RenderClient 0x" << std::hex << this << std::dec << std::endl;
-		HRESULT hr = (this->*(sDetourGetBuffer->getRealFunc()))(NumFramesRequested, ppData);
-		BufferData = *ppData;
-		return hr;
+		return sCbGetBuffer(this, NumFramesRequested, ppData);
 	}
+	CARL_METHOD_SETUP(MyAudioRenderClient, HRESULT, ReleaseBuffer, UINT32 NumFramesWritten, DWORD dwFlags);
 	HRESULT __stdcall MyReleaseBuffer(UINT32 NumFramesWritten, DWORD dwFlags)
 	{
-		if (gRenderClients.find(this) == gRenderClients.begin() && !gAudioClients.empty())
-		{
-			auto pwfx = gAudioClients.begin()->second;
-			uint64_t frameSize = pwfx->nChannels * (pwfx->wBitsPerSample / 8);
-			outFileStream.write((char*)BufferData, NumFramesWritten * frameSize);
-			outFileStream.flush();
-		}
-		return (this->*(sDetourReleaseBuffer->getRealFunc()))(NumFramesWritten, dwFlags);
-	}
-private:
-	bool autoSelfRegister()
-	{
-		std::lock_guard lock(gMtxRenderClients);
-		if (gRenderClients.find(this) != gRenderClients.end())
-			return false;
-		gRenderClients.insert(this);
-		return true;
+		return sCbReleaseBuffer(this, NumFramesWritten, dwFlags);
 	}
 public:
 	inline static BYTE* BufferData = 0;
-	inline static CarlDetourRef<MyAudioRenderClient_GetBuffer_t> sDetourGetBuffer = nullptr;
-	inline static CarlDetourRef<MyAudioRenderClient_ReleaseBuffer_t> sDetourReleaseBuffer = nullptr;
 };
 
 IAudioClient* createDummyAudioClient()
@@ -153,24 +87,24 @@ IAudioClient* createDummyAudioClient()
 		(void**)&pEnumerator
 	);
 	if (!SUCCEEDED(hr))
-		std::cout << "CoCreateInstance returned with code " << std::hex << hr << std::endl;
+		return nullptr;
 
 	hr = pEnumerator->GetDefaultAudioEndpoint(
 		eRender, eConsole, &pDevice
 	);
 	if (!SUCCEEDED(hr))
-		std::cout << "pEnumerator->GetDefaultAudioEndpoint returned with code " << std::hex << hr << std::endl;
+		return nullptr;
 
 	hr = pDevice->Activate(
 		IID_IAudioClient, CLSCTX_ALL,
 		NULL, (void**)&pAudioClient
 	);
 	if (!SUCCEEDED(hr))
-		std::cout << "pDevice->Activate returned with code " << std::hex << hr << std::endl;
+		return nullptr;
 
 	hr = pAudioClient->GetMixFormat(&pwfx);
 	if (!SUCCEEDED(hr))
-		std::cout << "pAudioClient->GetMixFormat returned with code " << std::hex << hr << std::endl;
+		return nullptr;
 
 	hr = pAudioClient->Initialize(
 		AUDCLNT_SHAREMODE_SHARED,
@@ -181,7 +115,7 @@ IAudioClient* createDummyAudioClient()
 		nullptr
 	);
 	if (!SUCCEEDED(hr))
-		std::cout << "pAudioClient->Initialize returned with code " << std::hex << hr << std::endl;
+		return nullptr;
 
 	CoTaskMemFree(pwfx);
 	pEnumerator->Release();
@@ -203,7 +137,7 @@ IAudioRenderClient* createDummyAudioRenderClient(IAudioClient* pAudioClient)
 
 	hr = pAudioClient->GetService(IID_IAudioRenderClient, (void**)&pAudioRenderClient);
 	if (!SUCCEEDED(hr))
-		std::cout << "pAudioClient->GetService returned with code " << std::hex << hr << std::endl;
+		return nullptr;
 
 	return pAudioRenderClient;
 }
@@ -218,16 +152,16 @@ void makeAudioRenderClientDetours()
 	IAudioClient* pAudioClient = createDummyAudioClient();
 	IAudioRenderClient* pAudioRenderClient = createDummyAudioRenderClient(pAudioClient);
 
-	MyAudioClient::sDetourGetCurrentPadding = std::make_shared<CarlDetour<MyAudioClient_GetCurrentPadding_t>>(
-		GetFuncFromObjVTable<MyAudioClient_GetCurrentPadding_t>(pAudioClient, 6),
+	MyAudioClient::sDetourGetCurrentPadding = std::make_shared<CarlDetour<MyAudioClient::GetCurrentPadding_t>>(
+		GetFuncFromObjVTable<MyAudioClient::GetCurrentPadding_t>(pAudioClient, 6),
 		&MyAudioClient::MyGetCurrentPadding
 		);
-	MyAudioRenderClient::sDetourGetBuffer = std::make_shared<CarlDetour<MyAudioRenderClient_GetBuffer_t>>(
-		GetFuncFromObjVTable<MyAudioRenderClient_GetBuffer_t>(pAudioRenderClient, 3),
+	MyAudioRenderClient::sDetourGetBuffer = std::make_shared<CarlDetour<MyAudioRenderClient::GetBuffer_t>>(
+		GetFuncFromObjVTable<MyAudioRenderClient::GetBuffer_t>(pAudioRenderClient, 3),
 		&MyAudioRenderClient::MyGetBuffer
 		);
-	MyAudioRenderClient::sDetourReleaseBuffer = std::make_shared<CarlDetour<MyAudioRenderClient_ReleaseBuffer_t>>(
-		GetFuncFromObjVTable<MyAudioRenderClient_ReleaseBuffer_t>(pAudioRenderClient, 4),
+	MyAudioRenderClient::sDetourReleaseBuffer = std::make_shared<CarlDetour<MyAudioRenderClient::ReleaseBuffer_t>>(
+		GetFuncFromObjVTable<MyAudioRenderClient::ReleaseBuffer_t>(pAudioRenderClient, 4),
 		&MyAudioRenderClient::MyReleaseBuffer
 		);
 
@@ -235,22 +169,13 @@ void makeAudioRenderClientDetours()
 	destroyDummyAudioClient(pAudioClient);
 }
 
-void SearchWaveFormatExPtrInAudioClient(IAudioClient* pAudioClient)
+uint64_t SearchWaveFormatExPtrInAudioClient(IAudioClient* pAudioClient)
 {
-	WAVEFORMATEX* pwfx; // fe ff 08 00 80 bb 00 00 00 70 17 00 20 00 20 00 16 00
+	WAVEFORMATEX* pwfx; // Example: fe ff 08 00 80 bb 00 00 00 70 17 00 20 00 20 00 16 00
 	pAudioClient->GetMixFormat(&pwfx);
 	
 	std::set<uintptr_t> toCheck;
-	while (true)
-	{
-		uintptr_t ptr;
-		std::cout << " > ";
-		std::cin >> std::hex;
-		std::cin >> ptr;
-		if (ptr == 0)
-			break;
-		toCheck.insert(ptr);
-	}
+	// TODO: Insert addresses of *pwfx occurences into toCheck
 
 	char* pRawAudioClient = (char*)pAudioClient;
 	{
@@ -259,9 +184,10 @@ void SearchWaveFormatExPtrInAudioClient(IAudioClient* pAudioClient)
 		{
 			uintptr_t* curr = (uintptr_t*)(pRawAudioClient + offset);
 			if (toCheck.find(*curr) != toCheck.end())
-				std::cout << "Found match at offset " << std::dec << offset << std::endl;
+				return offset;
 			++offset;
 		}
 	}
 	CoTaskMemFree(pwfx);
+	return -1;
 }

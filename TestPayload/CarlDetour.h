@@ -43,6 +43,11 @@ public:
 	{
 		return m_detourFunc;
 	}
+	template <typename Ret, class Class, typename ...Args>
+	Ret callReal(Class* pInstance, Args... args) const
+	{
+		return (pInstance->*getRealFunc())(args...);
+	}
 private:
 	long m_errCode = 0;
 	Function_t m_realFunc = nullptr;
