@@ -70,8 +70,6 @@ void mainFunc(std::string port)
 		std::string line = (char*)pack.buffer->data();
 		std::cout << line << std::endl;
 	}
-
-	removeAudioRenderClientDetours();
 }
 
 extern "C" DWORD WINAPI mainFuncThread(void* param)

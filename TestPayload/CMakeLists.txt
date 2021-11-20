@@ -8,7 +8,7 @@ set(CMAKE_CXX_STANDARD_REQUIRED TRUE)
 add_library(
 	TestPayload SHARED 
 	"TestPayload.cpp"
-  "MyAudioClient.h" "GetFuncFromObjVTable.h" )
+)
 
 target_link_libraries(
 	TestPayload PUBLIC 

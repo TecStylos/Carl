@@ -8,8 +8,8 @@
 
 #include <Audioclient.h>
 #include <mmdeviceapi.h>
-#include <detours.h>
 
+#include "CarlDetour.h"
 #include "GetFuncFromObjVTable.h"
 
 #if !defined(PAYLOAD_ARCH_x86) && !defined(PAYLOAD_ARCH_x64)
@@ -38,7 +38,6 @@ static std::set<IAudioRenderClient*> gRenderClients;
 #include <fstream>
 std::ofstream outFileStream;
 
-
 class MyAudioClient : public IAudioClient
 {
 public:
@@ -46,7 +45,7 @@ public:
 	{
 		if (autoSelfRegister())
 			std::cout << "Registered AudioClient 0x" << std::hex << this << std::endl;
-		return (this->*realGetCurrentPadding)(pNumPaddingFrames);
+		return (this->*(sDetourGetCurrentPadding->getRealFunc()))(pNumPaddingFrames);
 	}
 private:
 	bool autoSelfRegister()
@@ -84,14 +83,12 @@ private:
 	}
 	WAVEFORMATEX* getInternalWFX()
 	{
-		WAVEFORMATEXTENSIBLE;
 		// Pointer to internal waveformatex struct is stored at this+PWFX_OFFSET
 		char* pData = (char*)this;
 		return *(WAVEFORMATEX**)(pData + PWFX_OFFSET);
 	}
 public:
-	inline static MyAudioClient_GetCurrentPadding_t realGetCurrentPadding = 0; // vtable[6]
-	inline static const MyAudioClient_GetCurrentPadding_t pfMyGetCurrentPadding = &MyAudioClient::MyGetCurrentPadding;
+	inline static CarlDetourRef<MyAudioClient_GetCurrentPadding_t> sDetourGetCurrentPadding = nullptr;
 private:
 	#if defined PAYLOAD_ARCH_x64
 	inline static const uint64_t PWFX_OFFSET = 904;
@@ -109,7 +106,7 @@ public:
 	{
 		if (autoSelfRegister())
 			std::cout << "Registered RenderClient 0x" << std::hex << this << std::dec << std::endl;
-		HRESULT hr = (this->*realGetBuffer)(NumFramesRequested, ppData);
+		HRESULT hr = (this->*(sDetourGetBuffer->getRealFunc()))(NumFramesRequested, ppData);
 		BufferData = *ppData;
 		return hr;
 	}
@@ -122,7 +119,7 @@ public:
 			outFileStream.write((char*)BufferData, NumFramesWritten * frameSize);
 			outFileStream.flush();
 		}
-		return (this->*realReleaseBuffer)(NumFramesWritten, dwFlags);
+		return (this->*(sDetourReleaseBuffer->getRealFunc()))(NumFramesWritten, dwFlags);
 	}
 private:
 	bool autoSelfRegister()
@@ -135,10 +132,8 @@ private:
 	}
 public:
 	inline static BYTE* BufferData = 0;
-	inline static MyAudioRenderClient_GetBuffer_t realGetBuffer = 0; // vtable[3]
-	inline static const MyAudioRenderClient_GetBuffer_t pfMyGetBuffer = &MyAudioRenderClient::MyGetBuffer;
-	inline static MyAudioRenderClient_ReleaseBuffer_t realReleaseBuffer = 0; // vtable[4]
-	inline static const MyAudioRenderClient_ReleaseBuffer_t pfMyReleaseBuffer = &MyAudioRenderClient::MyReleaseBuffer;
+	inline static CarlDetourRef<MyAudioRenderClient_GetBuffer_t> sDetourGetBuffer = nullptr;
+	inline static CarlDetourRef<MyAudioRenderClient_ReleaseBuffer_t> sDetourReleaseBuffer = nullptr;
 };
 
 IAudioClient* createDummyAudioClient()
@@ -222,28 +217,22 @@ void makeAudioRenderClientDetours()
 {
 	IAudioClient* pAudioClient = createDummyAudioClient();
 	IAudioRenderClient* pAudioRenderClient = createDummyAudioRenderClient(pAudioClient);
-	MyAudioClient::realGetCurrentPadding = GetFuncFromObjVTable<MyAudioClient_GetCurrentPadding_t>(pAudioClient, 6);
-	MyAudioRenderClient::realGetBuffer = GetFuncFromObjVTable<MyAudioRenderClient_GetBuffer_t>(pAudioRenderClient, 3);
-	MyAudioRenderClient::realReleaseBuffer = GetFuncFromObjVTable<MyAudioRenderClient_ReleaseBuffer_t>(pAudioRenderClient, 4);
+
+	MyAudioClient::sDetourGetCurrentPadding = std::make_shared<CarlDetour<MyAudioClient_GetCurrentPadding_t>>(
+		GetFuncFromObjVTable<MyAudioClient_GetCurrentPadding_t>(pAudioClient, 6),
+		&MyAudioClient::MyGetCurrentPadding
+		);
+	MyAudioRenderClient::sDetourGetBuffer = std::make_shared<CarlDetour<MyAudioRenderClient_GetBuffer_t>>(
+		GetFuncFromObjVTable<MyAudioRenderClient_GetBuffer_t>(pAudioRenderClient, 3),
+		&MyAudioRenderClient::MyGetBuffer
+		);
+	MyAudioRenderClient::sDetourReleaseBuffer = std::make_shared<CarlDetour<MyAudioRenderClient_ReleaseBuffer_t>>(
+		GetFuncFromObjVTable<MyAudioRenderClient_ReleaseBuffer_t>(pAudioRenderClient, 4),
+		&MyAudioRenderClient::MyReleaseBuffer
+		);
+
 	destroyDummyAudioRenderClient(pAudioRenderClient);
 	destroyDummyAudioClient(pAudioClient);
-
-	DetourTransactionBegin();
-	DetourUpdateThread(GetCurrentThread());
-	DetourAttach(&(PVOID&)MyAudioClient::realGetCurrentPadding, *(PBYTE*)&MyAudioClient::pfMyGetCurrentPadding);
-	DetourAttach(&(PVOID&)MyAudioRenderClient::realGetBuffer, *(PBYTE*)&MyAudioRenderClient::pfMyGetBuffer);
-	DetourAttach(&(PVOID&)MyAudioRenderClient::realReleaseBuffer, *(PBYTE*)&MyAudioRenderClient::pfMyReleaseBuffer);
-	DetourTransactionCommit();
-}
-
-void removeAudioRenderClientDetours()
-{
-	DetourTransactionBegin();
-	DetourUpdateThread(GetCurrentThread());
-	DetourDetach(&(PVOID&)MyAudioClient::realGetCurrentPadding, *(PBYTE*)&MyAudioClient::pfMyGetCurrentPadding);
-	DetourDetach(&(PVOID&)MyAudioRenderClient::realGetBuffer, *(PBYTE*)&MyAudioRenderClient::pfMyGetBuffer);
-	DetourDetach(&(PVOID&)MyAudioRenderClient::realReleaseBuffer, *(PBYTE*)&MyAudioRenderClient::pfMyReleaseBuffer);
-	DetourTransactionCommit();
 }
 
 void SearchWaveFormatExPtrInAudioClient(IAudioClient* pAudioClient)
