@@ -1,8 +1,8 @@
 #include <iostream>
 
+#include <set>
 #include <Carl.h>
 #include <CarlPayload.h>
-#include <set>
 
 #include <Audioclient.h>
 
@@ -19,29 +19,70 @@ enum class WaveBaseType
 	Int64,
 	Float,
 	Double
-} wbt = WaveBaseType::None;
+} gWbt = WaveBaseType::None;
+
+uint64_t WaveBaseTypeSize(WaveBaseType wbt)
+{
+	switch (wbt)
+	{
+	case WaveBaseType::None: return 0;
+	case WaveBaseType::Int8: return 1;
+	case WaveBaseType::Int16: return 2;
+	case WaveBaseType::Int32: return 4;
+	case WaveBaseType::Int64: return 8;
+	case WaveBaseType::Float: return 4;
+	case WaveBaseType::Double: return 8;
+	}
+	return 0;
+}
 
 bool receivedWfx = false;
 WAVEFORMATEX wfx;
 
 template <typename T>
-bool isFloatingPointBuffer(const void* buffer, uint64_t bufferSize, uint64_t nChannels)
+bool isFloatingPointBuffer(const void* buffer, uint64_t nFrames, uint64_t nChannels)
 {
-	uint64_t sampleSize = nChannels * sizeof(T);
+	uint64_t frameSize = nChannels * sizeof(T);
 	uint64_t nInRange = 0;
-	uint64_t offset = 0;
-	while (offset + sampleSize <= bufferSize)
+
+	for (uint64_t i = 0; i < nFrames * nChannels; ++i)
 	{
-		for (uint64_t i = 0; i < nChannels; ++i)
-		{
-			float* pTest = (float*)((const char*)buffer + offset + i * sizeof(T));
-			if (-1.0f <= *pTest && *pTest <= 1.0f)
-				++nInRange;
-		}
-		offset += sampleSize;
+		T toCheck = *((T*)buffer + i);
+		if (-1.0f <= toCheck && toCheck <= 1.0f)
+			++nInRange;
 	}
 
-	return nInRange > (bufferSize / sizeof(T) * 9 / 10);
+	return nInRange > (nFrames * nChannels * 9 / 10);
+}
+template <typename T>
+constexpr uint64_t WaveChannelSize()
+{
+	return sizeof(T);
+}
+template <typename T>
+constexpr uint64_t WaveFrameSize(uint64_t nChannels)
+{
+	return WaveChannelSize<T>() * nChannels;
+}
+
+template<typename To, typename From, uint64_t ToMax, uint64_t FromMax>
+void convertBuffer(void* destBuffer, const void* srcBuffer, uint64_t nChannels, uint64_t nFrames)
+{
+	static constexpr uint64_t destChannelSize = WaveChannelSize<To>();
+	static constexpr uint64_t srcChannelSize = WaveChannelSize<From>();
+	const uint64_t destFrameSize = WaveFrameSize<To>(nChannels);
+	const uint64_t srcFrameSize = WaveFrameSize<From>(nChannels);
+
+	static constexpr float ConvRatio = (float)ToMax / (float)FromMax;
+
+	auto pDest = (To*)destBuffer;
+	auto pSrc = (From*)srcBuffer;
+	for (uint64_t i = 0; i < nFrames * nChannels; ++i)
+	{
+		float temp = *(pSrc + i);
+		temp *= ConvRatio;
+		*(pDest + i) = temp;
+	}
 }
 
 WaveBaseType detectWaveBaseType(WAVEFORMATEX* pwfx, const void* buffer, uint64_t bufferSize)
@@ -55,11 +96,11 @@ WaveBaseType detectWaveBaseType(WAVEFORMATEX* pwfx, const void* buffer, uint64_t
 	case 2:
 		return WaveBaseType::Int16;
 	case 4:
-		if (isFloatingPointBuffer<float>(buffer, bufferSize, pwfx->nChannels))
+		if (isFloatingPointBuffer<float>(buffer, bufferSize / (channelSize * pwfx->nChannels), pwfx->nChannels))
 			return WaveBaseType::Float;
 		return WaveBaseType::Int32;
 	case 8:
-		if (isFloatingPointBuffer<double>(buffer, bufferSize, pwfx->nChannels))
+		if (isFloatingPointBuffer<double>(buffer, bufferSize / (channelSize * pwfx->nChannels), pwfx->nChannels))
 			return WaveBaseType::Double;
 		return WaveBaseType::Int64;
 	}
@@ -72,14 +113,26 @@ void RenderFrameCallback(EHSN::net::Packet pack, uint64_t nBytesReceived, void* 
 	if (nBytesReceived < pack.header.packetSize)
 		return;
 
-	if (wbt == WaveBaseType::None && receivedWfx)
+	if (gWbt == WaveBaseType::None)
 	{
-		wbt = detectWaveBaseType(&wfx, pack.buffer->data(), pack.buffer->size());
-		std::cout << "WaveBaseType = " << (int)wbt << std::endl;
+		if (!receivedWfx)
+			return;
+		gWbt = detectWaveBaseType(&wfx, pack.buffer->data(), pack.buffer->size());
+		std::cout << "WaveBaseType = " << (int)gWbt << std::endl;
+	}
+	if (gWbt != WaveBaseType::Float)
+	{
+		std::cout << "Wrong WaveBaseType!" << std::endl;
+		return;
 	}
 
-	outFileStream.write((const char*)pack.buffer->data(), nBytesReceived);
+	uint64_t nFrames = nBytesReceived / (wfx.nChannels * wfx.wBitsPerSample / 8);
+	auto outBuffer = new char[nFrames * WaveFrameSize<int16_t>(wfx.nChannels)];
+
+	convertBuffer<int16_t, float, 32767, 1>(outBuffer, pack.buffer->data(), wfx.nChannels, nFrames);
+	outFileStream.write(outBuffer, nFrames * wfx.nChannels * WaveChannelSize<int16_t>());
 	outFileStream.flush();
+	delete[] outBuffer;
 }
 
 int main()
