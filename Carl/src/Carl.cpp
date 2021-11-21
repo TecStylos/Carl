@@ -11,7 +11,7 @@ namespace Carl
 		auto procArch = getProcArch(targetPID);
 
 		auto procArchStr = ProcArchToStr(procArch);
-		uint64_t offset = payloadPath.find("[.]");
+		size_t offset = payloadPath.find("[.]");
 		if (offset == std::string::npos)
 			throw CarlError("Invalid payloadPath! Unable to find architecture sequence '[.]'!");
 		std::string correctedPayloadPath = payloadPath;

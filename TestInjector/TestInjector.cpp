@@ -38,6 +38,11 @@ uint64_t WaveBaseTypeSize(WaveBaseType wbt)
 
 bool receivedWfx = false;
 WAVEFORMATEX wfx;
+struct Connections
+{
+	EHSN::net::ManagedSocket* queueSpotify;
+	EHSN::net::ManagedSocket* queueDiscord;
+};
 
 template <typename T>
 bool isFloatingPointBuffer(const void* buffer, uint64_t nFrames, uint64_t nChannels)
@@ -66,22 +71,41 @@ constexpr uint64_t WaveFrameSize(uint64_t nChannels)
 }
 
 template<typename To, typename From, uint64_t ToMax, uint64_t FromMax>
-void convertBuffer(void* destBuffer, const void* srcBuffer, uint64_t nChannels, uint64_t nFrames)
+void convertBuffer(void* destBuffer, const void* srcBuffer, uint64_t nChannels, uint64_t nFrames, bool makeMono)
 {
-	static constexpr uint64_t destChannelSize = WaveChannelSize<To>();
-	static constexpr uint64_t srcChannelSize = WaveChannelSize<From>();
-	const uint64_t destFrameSize = WaveFrameSize<To>(nChannels);
-	const uint64_t srcFrameSize = WaveFrameSize<From>(nChannels);
+	const uint64_t nDestChannels = makeMono ? 1 : nChannels;
 
 	static constexpr float ConvRatio = (float)ToMax / (float)FromMax;
 
 	auto pDest = (To*)destBuffer;
 	auto pSrc = (From*)srcBuffer;
-	for (uint64_t i = 0; i < nFrames * nChannels; ++i)
+
+	void (*convertFrame)(To*, From*, uint64_t) = [](To* pDest, From* pSrc, uint64_t nChannels) {
+		for (uint64_t channel = 0; channel < nChannels; ++channel)
+		{
+			float temp = *(pSrc + channel);
+			temp *= ConvRatio;
+			*(pDest + channel) = temp;
+		}
+	};
+
+	if (makeMono)
 	{
-		float temp = *(pSrc + i);
-		temp *= ConvRatio;
-		*(pDest + i) = temp;
+		convertFrame = [](To* pDest, From* pSrc, uint64_t nChannels) {
+			float temp = *(pSrc);
+			for (uint64_t channel = 0; channel < nChannels; ++channel)
+				temp += *(pSrc + channel);
+			temp *= ConvRatio;
+			temp /= nChannels;
+			*(pDest) = temp;
+		};
+	}
+
+	for (uint64_t i = 0; i < nFrames; ++i)
+	{
+		convertFrame(pDest, pSrc, nChannels);
+		pDest += nDestChannels;
+		pSrc += nChannels;
 	}
 }
 
@@ -110,13 +134,17 @@ WaveBaseType detectWaveBaseType(WAVEFORMATEX* pwfx, const void* buffer, uint64_t
 
 void RenderFrameCallback(EHSN::net::Packet pack, uint64_t nBytesReceived, void* pParam)
 {
+	Connections* pCons = (Connections*)pParam;
 	if (nBytesReceived < pack.header.packetSize)
 		return;
 
 	if (gWbt == WaveBaseType::None)
 	{
 		if (!receivedWfx)
+		{
+			pCons->queueSpotify->push(Carl::PT_WAVEFORMATEX_REQUEST, EHSN::net::FLAG_PH_NONE, nullptr);
 			return;
+		}
 		gWbt = detectWaveBaseType(&wfx, pack.buffer->data(), pack.buffer->size());
 		std::cout << "WaveBaseType = " << (int)gWbt << std::endl;
 	}
@@ -127,46 +155,68 @@ void RenderFrameCallback(EHSN::net::Packet pack, uint64_t nBytesReceived, void* 
 	}
 
 	uint64_t nFrames = nBytesReceived / (wfx.nChannels * wfx.wBitsPerSample / 8);
-	auto outBuffer = new char[nFrames * WaveFrameSize<int16_t>(wfx.nChannels)];
+	auto buffer = std::make_shared<EHSN::net::PacketBuffer>(nFrames * WaveFrameSize<int16_t>(1));
 
-	convertBuffer<int16_t, float, 32767, 1>(outBuffer, pack.buffer->data(), wfx.nChannels, nFrames);
-	outFileStream.write(outBuffer, nFrames * wfx.nChannels * WaveChannelSize<int16_t>());
-	outFileStream.flush();
-	delete[] outBuffer;
+	convertBuffer<int16_t, float, 32767, 1>(buffer->data(), pack.buffer->data(), wfx.nChannels, nFrames, true);
+
+	pCons->queueDiscord->push(Carl::PT_CAPTURE_FRAME, EHSN::net::FLAG_PH_NONE, buffer);
 }
 
 int main()
 {
 	std::string agentDir = "..\\..\\..\\bintools\\Debug\\";
 
-	std::cout << "Target PID: ";
-	std::string tPIDStr;
-	std::getline(std::cin, tPIDStr);
-	Carl::ProcessID targetPID;
-	targetPID = std::stoul(tPIDStr);
+	std::string strPIDSpotify, strPIDDiscord;
+	Carl::ProcessID PIDSpotify, PIDDiscord;
+	std::cout << "Spotify PID: ";
+	std::getline(std::cin, strPIDSpotify);
+	std::cout << "Discord PID: ";
+	std::getline(std::cin, strPIDDiscord);
+	PIDSpotify = std::stoul(strPIDSpotify);
+	PIDDiscord = std::stoul(strPIDDiscord);
 
 	std::string payloadPath = "..\\..\\..\\bintools\\Debug\\TestPayload_[.].dll";
 
-	Carl::PayloadConnectorRef pc;
+	Carl::PayloadConnectorRef pcSpotify, pcDiscord;
 
 	try
 	{
-		pc = Carl::injectPayload(agentDir, targetPID, payloadPath);
+		pcSpotify = Carl::injectPayload(agentDir, PIDSpotify, payloadPath);
 	}
 	catch (const Carl::CarlError& err)
 	{
-		std::cout << "ERROR: " << err.what() << std::endl;
+		std::cout << "ERROR Injecting into Spotify: " << err.what() << std::endl;
 		return -1;
 	}
 
-	std::cout << "PayloadConnector port: " << pc->getPort() << std::endl;
+	std::cout << "Injected into Spotify!" << std::endl;
 
-	auto queue = pc->getQueue();
+	try
+	{
+		pcDiscord = Carl::injectPayload(agentDir, PIDDiscord, payloadPath);
+	}
+	catch (const Carl::CarlError& err)
+	{
+		std::cout << "ERROR Injecting into Discord: " << err.what() << std::endl;
+		return -1;
+	}
 
-	outFileStream = std::ofstream("C:\\Users\\tecst\\Desktop\\output.raw", std::ios::binary | std::ios::out | std::ios::trunc);
-	queue->setRecvCallback(Carl::PT_RENDER_FRAME, RenderFrameCallback, nullptr);
-	queue->setRecvCallback(
-		Carl::PT_WAVEFORMATEX,
+	std::cout << "Injected into Discord!" << std::endl;
+
+	std::cout << "PCSpotify port: " << pcSpotify->getPort() << std::endl;
+	std::cout << "PCDiscord port: " << pcDiscord->getPort() << std::endl;
+
+	auto queueSpotify = pcSpotify->getQueue();
+	auto queueDiscord = pcDiscord->getQueue();
+
+	Connections cons;
+	cons.queueSpotify = queueSpotify.get();
+	cons.queueDiscord = queueDiscord.get();
+
+	outFileStream = std::ofstream("C:\\Users\\tecst\\Desktop\\_output.raw", std::ios::binary | std::ios::out | std::ios::trunc);
+	queueSpotify->setRecvCallback(Carl::PT_RENDER_FRAME, RenderFrameCallback, &cons);
+	queueSpotify->setRecvCallback(
+		Carl::PT_WAVEFORMATEX_REPLY,
 		[](EHSN::net::Packet pack, uint64_t nBytesReceived, void* pParam) {
 			if (nBytesReceived < pack.header.packetSize)
 				return;
@@ -176,14 +226,19 @@ int main()
 		nullptr
 			);
 
-	while (queue->isConnected())
+	queueSpotify->push(Carl::PT_START_RENDER_FRAME, EHSN::net::FLAG_PH_NONE, nullptr);
+	std::this_thread::sleep_for(std::chrono::milliseconds(100));
+	queueDiscord->push(Carl::PT_START_CAPTURE_FRAME, EHSN::net::FLAG_PH_NONE, nullptr);
+
+	while (queueSpotify->isConnected() && queueDiscord->isConnected())
 	{
-		std::string line;
+		std::this_thread::sleep_for(std::chrono::milliseconds(100));
+		/*std::string line;
 		std::cout << " >>> ";
 		std::getline(std::cin, line);
 		auto pBuffer = std::make_shared<EHSN::net::PacketBuffer>(line.size() + 1);
 		pBuffer->write(line.c_str(), line.size() + 1, 0);
-		queue->push(Carl::PT_ECHO_REQUEST, EHSN::net::FLAG_PH_NONE, pBuffer);
+		queue->push(Carl::PT_ECHO_REQUEST, EHSN::net::FLAG_PH_NONE, pBuffer);*/
 	}
 
 	return 0;

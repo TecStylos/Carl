@@ -75,6 +75,8 @@ public:
 	{
 		return sCbReleaseBuffer(this, NumFramesRead);
 	}
+public:
+	inline static void* sFakeData = 0;
 };
 
 IAudioClient* createDummyAudioClient(EDataFlow dataFlow)

@@ -7,7 +7,17 @@
 #include "MyAudioClient.h"
 #include "CarlEntryPoint.h"
 
-static EHSN::net::ManagedSocketRef manSockRef = nullptr;
+static EHSN::net::ManagedSocketRef gQueue = nullptr;
+static EHSN::CircularBuffer gCaptureCircularBuffer(1024 * 1024);
+static bool gIsReadingRenderFrames = false;
+static bool gIsWritingCaptureFrames = false;
+static WAVEFORMATEX* gpWfx = nullptr;
+static std::mutex gMtxAudioClients;
+static std::mutex gMtxRenderClients;
+static std::mutex gMtxCaptureClients;
+static std::map<MyAudioClient*, WAVEFORMATEX*> gAudioClients;
+static std::set<MyAudioRenderClient*> gRenderClients;
+static std::set<MyAudioCaptureClient*> gCaptureClients;
 
 namespace Carl
 {
@@ -17,40 +27,90 @@ namespace Carl
 	{
 		std::string port = (char*)param;
 
-		manSockRef = std::make_shared<EHSN::net::ManagedSocket>(std::make_shared<EHSN::net::SecSocket>(EHSN::crypto::defaultRDG, 0));
+		gQueue = std::make_shared<EHSN::net::ManagedSocket>(std::make_shared<EHSN::net::SecSocket>(EHSN::crypto::defaultRDG, 0));
 
 		uint8_t connectCount = 0;
-		while (!manSockRef->isConnected() && connectCount++ < 8)
-			manSockRef->connect("localhost", port, true);
+		while (!gQueue->isConnected() && connectCount++ < 8)
+			gQueue->connect("localhost", port, true);
 
-		if (!manSockRef->isConnected())
+		if (!gQueue->isConnected())
 			return -1;
+
+		gQueue->setRecvCallback(
+			Carl::PT_WAVEFORMATEX_REQUEST,
+			[](EHSN::net::Packet pack, uint64_t nBytesReceived, void* pParam) {
+				if (nBytesReceived < pack.header.packetSize)
+					return;
+
+				if (!gpWfx)
+				{
+					gQueue->push(Carl::PT_WAVEFORMATEX_REPLY, EHSN::net::FLAG_PH_NONE, nullptr);
+					return;
+				}
+				auto buffer = std::make_shared<EHSN::net::PacketBuffer>(sizeof(WAVEFORMATEX));
+				buffer->write(*gpWfx);
+				gQueue->push(Carl::PT_WAVEFORMATEX_REPLY, EHSN::net::FLAG_PH_NONE, buffer);
+			},
+			nullptr
+				);
+
+		gQueue->setRecvCallback(
+			Carl::PT_START_RENDER_FRAME,
+			[](EHSN::net::Packet pack, uint64_t nBytesReceived, void* pParam) {
+				gIsReadingRenderFrames = true;
+			},
+			nullptr
+				);
+		gQueue->setRecvCallback(
+			Carl::PT_STOP_RENDER_FRAME,
+			[](EHSN::net::Packet pack, uint64_t nBytesReceived, void* pParam) {
+				gIsReadingRenderFrames = false;
+			},
+			nullptr
+				);
+		gQueue->setRecvCallback(
+			Carl::PT_START_CAPTURE_FRAME,
+			[](EHSN::net::Packet pack, uint64_t nBytesReceived, void* pParam) {
+				gIsWritingCaptureFrames = true;
+			},
+			nullptr
+				);
+		gQueue->setRecvCallback(
+			Carl::PT_STOP_CAPTURE_FRAME,
+			[](EHSN::net::Packet pack, uint64_t nBytesReceived, void* pParam) {
+				gIsWritingCaptureFrames = false;
+			},
+			nullptr
+				);
+		gQueue->setRecvCallback(
+			Carl::PT_CAPTURE_FRAME,
+			[](EHSN::net::Packet pack, uint64_t nBytesReceived, void* pParam) {
+				if (nBytesReceived < pack.header.packetSize)
+					return;
+				gCaptureCircularBuffer.write(pack.buffer->data(), nBytesReceived);
+			},
+			nullptr
+				);
+		
 
 		std::cout << "Connected to host!" << std::endl;
 
 		makeAudioRenderClientDetours();
 
-		while (manSockRef->isConnected())
+		while (gQueue->isConnected())
 		{
-			auto pack = manSockRef->pull(Carl::PT_ECHO_REQUEST);
+			auto pack = gQueue->pull(Carl::PT_ECHO_REQUEST);
 			if (!pack.buffer)
 				break;
 			std::string line = (char*)pack.buffer->data();
 			std::cout << line << std::endl;
 		}
 
-		manSockRef.reset();
+		gQueue.reset();
 
 		return 0;
 	}
 }
-
-std::mutex gMtxAudioClients;
-std::mutex gMtxRenderClients;
-std::mutex gMtxCaptureClients;
-static std::map<MyAudioClient*, WAVEFORMATEX*> gAudioClients;
-static std::set<MyAudioRenderClient*> gRenderClients;
-static std::set<MyAudioCaptureClient*> gCaptureClients;
 
 bool autoRegisterAudioClient(MyAudioClient* pClient)
 {
@@ -81,14 +141,8 @@ bool autoRegisterAudioClient(MyAudioClient* pClient)
 
 	gAudioClients.insert({ pClient, pwfx });
 
-	if (manSockRef.get() != nullptr &&
-		manSockRef->isConnected()
-		)
-	{
-		auto buffer = std::make_shared<EHSN::net::PacketBuffer>(sizeof(WAVEFORMATEX));
-		buffer->write(*pwfx);
-		manSockRef->push(Carl::PT_WAVEFORMATEX, EHSN::net::FLAG_PH_NONE, buffer);
-	}
+
+	gpWfx = pwfx;
 
 	return true;
 }
@@ -129,8 +183,9 @@ MyAudioRenderClient::CbGetBuffer_t MyAudioRenderClient::sCbGetBuffer = [](MyAudi
 MyAudioRenderClient::CbReleaseBuffer_t MyAudioRenderClient::sCbReleaseBuffer = [](MyAudioRenderClient* pClient, UINT32 NumFramesWritten, DWORD dwFlags) {
 	if (gRenderClients.find(pClient) == gRenderClients.begin() &&
 		!gAudioClients.empty() &&
-		manSockRef.get() != nullptr &&
-		manSockRef->isConnected()
+		gQueue.get() != nullptr &&
+		gQueue->isConnected() &&
+		gIsReadingRenderFrames
 		)
 	{
 		auto pwfx = gAudioClients.begin()->second;
@@ -138,7 +193,8 @@ MyAudioRenderClient::CbReleaseBuffer_t MyAudioRenderClient::sCbReleaseBuffer = [
 
 		auto buffer = std::make_shared<EHSN::net::PacketBuffer>(NumFramesWritten * frameSize);
 		buffer->write(BufferData, NumFramesWritten * frameSize, 0);
-		manSockRef->push(Carl::PT_RENDER_FRAME, EHSN::net::FLAG_PH_NONE, buffer);
+		gQueue->push(Carl::PT_RENDER_FRAME, EHSN::net::FLAG_PH_NONE, buffer);
+		memset(BufferData, 0, NumFramesWritten * frameSize);
 	}
 	return sDetourReleaseBuffer->callReal<HRESULT>(pClient, NumFramesWritten, dwFlags);
 };
@@ -147,9 +203,18 @@ MyAudioCaptureClient::CbGetBuffer_t MyAudioCaptureClient::sCbGetBuffer = [](MyAu
 	if (autoRegisterAudioCaptureClient(pClient))
 		std::cout << "Registered CaptureClient 0x" << std::hex << pClient << std::dec << std::endl;
 	HRESULT hr = sDetourGetBuffer->callReal<HRESULT>(pClient, ppData, pNumFramesToRead, pdwFlags, pu64DevicePosition, pu64QPCPosition);
+	if (gIsWritingCaptureFrames && gpWfx && *pNumFramesToRead)
+	{
+		uint64_t nBytesToRead = *pNumFramesToRead * (gpWfx->wBitsPerSample / 8);
+		sFakeData = new char[nBytesToRead];
+		gCaptureCircularBuffer.read(sFakeData, nBytesToRead);
+		*ppData = (BYTE*)sFakeData;
+	}
 	return hr;
 };
 
 MyAudioCaptureClient::CbReleaseBuffer_t MyAudioCaptureClient::sCbReleaseBuffer = [](MyAudioCaptureClient* pClient, UINT32 NumFramesRead) {
+	if (gIsWritingCaptureFrames)
+		delete[] sFakeData;
 	return sDetourReleaseBuffer->callReal<HRESULT>(pClient, NumFramesRead);
 };
