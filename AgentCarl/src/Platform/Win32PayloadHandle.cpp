@@ -3,9 +3,11 @@
 #include <Psapi.h>
 #include <vector>
 
+//#pragma comment(lib, "cmcfg32.lib")
+
 #include "PayloadError.h"
 #include "Platform/Win32ErrorMessage.h"
-#include <iostream>
+
 namespace AgentCarl
 {
 	Win32PayloadHandle::Win32PayloadHandle(const std::string& payloadPath, ProcessID processID)
@@ -37,9 +39,23 @@ namespace AgentCarl
 	{
 		uint64_t payloadPathSize = m_payloadPath.size() + 1;
 
-		m_hProcTarget = OpenProcess(PROCESS_VM_READ | PROCESS_VM_WRITE | PROCESS_VM_OPERATION, FALSE, m_processID);
+		m_hProcTarget = OpenProcess(
+			PROCESS_VM_READ | PROCESS_VM_WRITE | PROCESS_VM_OPERATION | PROCESS_CREATE_THREAD | PROCESS_QUERY_INFORMATION,
+			FALSE,
+			m_processID
+		);
 		if (!*m_hProcTarget)
-			throw PayloadError("Unable to open process!: " + Win32LastErrorMessage());
+		{
+			getRequiredPrivileges();
+
+			m_hProcTarget = OpenProcess(
+				PROCESS_VM_READ | PROCESS_VM_WRITE | PROCESS_VM_OPERATION | PROCESS_CREATE_THREAD | PROCESS_QUERY_INFORMATION,
+				FALSE,
+				m_processID
+			);
+			if (!*m_hProcTarget)
+				throw PayloadError("Unable to open process!: " + Win32LastErrorMessage());
+		}
 
 		MemoryHelper nameMem = MemoryHelper(targetAlloc(payloadPathSize), this);
 
@@ -129,5 +145,46 @@ namespace AgentCarl
 		SIZE_T nRead = 0;
 		if (!ReadProcessMemory(*m_hProcTarget, srcTarget, dest, size, &nRead))
 			throw PayloadError("Unable to read from memory in the target process!: " + Win32LastErrorMessage());
+	}
+
+	void Win32PayloadHandle::getRequiredPrivileges()
+	{
+		HANDLE hProc = GetCurrentProcess();
+		Win32HandleHelper hToken;
+
+		if (!OpenProcessToken(
+			hProc,
+			TOKEN_ADJUST_PRIVILEGES,
+			&*hToken
+		))
+			throw PayloadError("Unable to open process token!: " + Win32LastErrorMessage());
+
+		TOKEN_PRIVILEGES tp;
+		LUID luid;
+
+		auto lpszPrivilege = SE_DEBUG_NAME;
+
+		if (!LookupPrivilegeValue(
+			NULL,
+			lpszPrivilege,
+			&luid
+		))
+			throw PayloadError("Unable to lookup privilege value!: " + Win32LastErrorMessage());
+
+		tp.PrivilegeCount = 1;
+		tp.Privileges[0].Attributes = SE_PRIVILEGE_ENABLED;
+
+		if (!AdjustTokenPrivileges(
+			*hToken,
+			FALSE,
+			&tp,
+			sizeof(TOKEN_PRIVILEGES),
+			nullptr,
+			0
+		))
+			throw PayloadError("Unable to adjust token privileges!: " + Win32LastErrorMessage());
+
+		if (GetLastError() == ERROR_NOT_ALL_ASSIGNED)
+			throw PayloadError("The token does not have the specified privilege!");
 	}
 }

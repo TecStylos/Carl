@@ -6,10 +6,6 @@
 
 #include <Audioclient.h>
 
-#include <fstream>
-
-std::ofstream outFileStream;
-
 enum class WaveBaseType
 {
 	None = 0,
@@ -213,7 +209,6 @@ int main()
 	cons.queueSpotify = queueSpotify.get();
 	cons.queueDiscord = queueDiscord.get();
 
-	outFileStream = std::ofstream("C:\\Users\\tecst\\Desktop\\_output.raw", std::ios::binary | std::ios::out | std::ios::trunc);
 	queueSpotify->setRecvCallback(Carl::PT_RENDER_FRAME, RenderFrameCallback, &cons);
 	queueSpotify->setRecvCallback(
 		Carl::PT_WAVEFORMATEX_REPLY,

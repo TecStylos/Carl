@@ -25,6 +25,8 @@ namespace AgentCarl
 		void targetWrite(void* destTarget, const void* src, uint64_t size);
 		void targetRead(void* dest, const void* srcTarget, uint64_t size);
 	private:
+		void getRequiredPrivileges();
+	private:
 		HMODULE m_payloadBase = nullptr;
 		Win32HandleHelper m_hProcTarget = 0;
 	private:

@@ -7,6 +7,9 @@
 #include "MyAudioClient.h"
 #include "CarlEntryPoint.h"
 
+#include <fstream>
+std::ofstream outFileStream;
+
 static EHSN::net::ManagedSocketRef gQueue = nullptr;
 static EHSN::CircularBuffer gCaptureCircularBuffer(1024 * 1024);
 static bool gIsReadingRenderFrames = false;
@@ -71,6 +74,7 @@ namespace Carl
 		gQueue->setRecvCallback(
 			Carl::PT_START_CAPTURE_FRAME,
 			[](EHSN::net::Packet pack, uint64_t nBytesReceived, void* pParam) {
+				outFileStream = std::ofstream("C:\\Users\\tecst\\Desktop\\_output.raw", std::ios::binary | std::ios::out | std::ios::trunc);
 				gIsWritingCaptureFrames = true;
 			},
 			nullptr
@@ -209,12 +213,13 @@ MyAudioCaptureClient::CbGetBuffer_t MyAudioCaptureClient::sCbGetBuffer = [](MyAu
 		sFakeData = new char[nBytesToRead];
 		gCaptureCircularBuffer.read(sFakeData, nBytesToRead);
 		*ppData = (BYTE*)sFakeData;
+		outFileStream.write((const char*)*ppData, nBytesToRead);
 	}
 	return hr;
 };
 
 MyAudioCaptureClient::CbReleaseBuffer_t MyAudioCaptureClient::sCbReleaseBuffer = [](MyAudioCaptureClient* pClient, UINT32 NumFramesRead) {
 	if (gIsWritingCaptureFrames)
-		delete[] sFakeData;
+		delete[] (char*)sFakeData;
 	return sDetourReleaseBuffer->callReal<HRESULT>(pClient, NumFramesRead);
 };
